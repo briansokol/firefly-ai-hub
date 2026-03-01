@@ -15,3 +15,14 @@ This repository is for planning and building an AI Hub on this server. It serves
 
 - Plans go in the `plans/` folder before implementation begins
 - Keep plans and their corresponding code co-located or clearly cross-referenced
+
+## Key Files
+
+- `plans/tasks.md` — Active task list with current progress (checked = done)
+- `plans/2026-02-27-ai-hub-architecture-design.md` — Full architecture plan and deployment order
+
+## Session Continuity
+
+- Use `/ai-hub-resume` at the start of any session to orient to current task list state
+- Tasks use `- [x]` / `- [ ]` checkboxes; completed sections are marked with ✓ in the header
+- User confirms completion of each task before moving to the next — don't skip ahead
