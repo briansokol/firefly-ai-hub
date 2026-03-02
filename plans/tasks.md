@@ -52,18 +52,28 @@ Last updated: 2026-02-28
 - [x] Write `hub/src/types.ts`, `hub/tsconfig.json`, minimal `hub/src/index.ts`
 - [x] Write `hub/Dockerfile` (multi-stage: build → runtime)
 - [x] Verify: `npm run build` → `hub/dist/` created; `docker build -t ai-hub:latest hub/` succeeds
-- [ ] Write `hub/src/config.ts` — `npm test` → 3 tests pass (file written, tests not yet)
-- [ ] Write `hub/src/ollama.ts` — `npm run build` → no errors
-- [ ] Write `hub/src/discord/router.ts` — `npm test` → 8 tests pass
-- [ ] Write `hub/src/discord/bot.ts`, update `hub/src/index.ts`
-- [ ] Write `hub/src/email/state.ts` — `npm test` → 12 tests pass
-- [ ] Write `hub/src/email/imap.ts`
-- [ ] Write `hub/src/email/triage.ts` (prompt builder) — `npm test` → 16 tests pass
-- [ ] Add `runEmailTriage`, write `hub/src/cron/daily-summary.ts`
-- [ ] Wire cron in final `hub/src/index.ts` — `npm run build && npm test` → 19 tests pass
-- [ ] Write `deploy/config.toml.example`, `deploy/docker-compose.yml` (both services)
+- [x] Write `hub/src/config.ts` — `npm test` → 5 tests pass
+- [x] Write `hub/src/ollama.ts` — `npm run build` → no errors
+- [x] Write `hub/src/discord/router.ts` — `npm test` → 8 tests pass
+- [x] Write `hub/src/discord/bot.ts`, update `hub/src/index.ts`
+- [x] Write `hub/src/email/state.ts` — `npm test` → 17 tests pass
+- [x] Write `hub/src/email/imap.ts`
+- [x] Write `hub/src/email/triage.ts` (prompt builder) — `npm test` → 28 tests pass
+- [ ] Write `deploy/config.toml.example`, `deploy/docker-compose.yml` (4 services: ai-hub, open-webui, temporal, postgresql)
 - [ ] Write `deploy/deploy.sh` (builds Docker image, syncs compose file)
 - [ ] Write `deploy/install-systemd.sh`, `systemd/ai-hub.service`
+
+### 5b. Temporal Integration (see `plans/2026-03-02-temporal-integration-design.md`)
+
+- [ ] Install Temporal SDK: `npm install @temporalio/client @temporalio/worker @temporalio/workflow @temporalio/activity`
+- [ ] Remove `node-cron` dependency: `npm uninstall node-cron @types/node-cron`
+- [ ] Write `hub/src/temporal/activities.ts` — wrappers around `imap.ts`, `triage.ts`, `ollama.ts`, `state.ts`
+- [ ] Write `hub/src/temporal/workflows.ts` — `chatWorkflow`, `emailTriageWorkflow`, `dailySummaryWorkflow`
+- [ ] Write `hub/src/temporal/worker.ts` — Worker setup, task queue `ai-hub`
+- [ ] Write `hub/src/temporal/schedules.ts` — registers email-triage + daily-summary Schedules on startup
+- [ ] Update `hub/src/discord/bot.ts` — start `chatWorkflow` via Temporal Client instead of direct `chat()` call
+- [ ] Write final `hub/src/index.ts` — start Worker + register Schedules, no node-cron
+- [ ] `npm run build && npm test` → no errors
 
 ### 6. Deploy & Start Full Stack
 - [ ] Create `/etc/ai-hub/hub.env` (mode 600), fill in secrets
