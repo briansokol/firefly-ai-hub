@@ -14,17 +14,19 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@temporalio/activity": "^1.15.0",
+    "@temporalio/client": "^1.15.0",
+    "@temporalio/worker": "^1.15.0",
+    "@temporalio/workflow": "^1.15.0",
     "better-sqlite3": "^12.6.2",
     "discord.js": "^14.25.1",
     "imapflow": "^1.2.10",
-    "node-cron": "^4.2.1",
     "openai": "^6.25.0",
     "smol-toml": "^1.6.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.3.3",
-    "@types/node-cron": "^3.0.11",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"
