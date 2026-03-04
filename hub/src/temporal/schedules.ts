@@ -11,7 +11,11 @@ async function ensureSchedule(
   try {
     await client.schedule.getHandle(scheduleId).describe();
     return; // already exists
-  } catch {
+  } catch (err) {
+    const message = err instanceof Error ? err.message.toLowerCase() : '';
+    if (!message.includes('not found') && !message.includes('no rows')) {
+      throw err;
+    }
     // does not exist — fall through to create
   }
 

@@ -29,7 +29,7 @@ export async function chatWorkflow(
 
 export async function emailTriageWorkflow(accountName: string): Promise<void> {
   const sinceUid = await getLastUid(accountName);
-  const { emails, maxUid } = await fetchEmails(accountName, sinceUid);
+  const { emails } = await fetchEmails(accountName, sinceUid);
   if (emails.length === 0) return;
 
   for (const email of emails) {
@@ -41,9 +41,8 @@ export async function emailTriageWorkflow(accountName: string): Promise<void> {
       result.urgent,
       result.actionItems,
     );
+    await updateLastUid(accountName, email.uid);
   }
-
-  await updateLastUid(accountName, maxUid);
 }
 
 export async function dailySummaryWorkflow(): Promise<void> {
