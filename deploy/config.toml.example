@@ -1,0 +1,24 @@
+[discord]
+token_env        = "DISCORD_TOKEN"
+allowed_user_ids = ["YOUR_DISCORD_USER_ID"]
+guild_id         = "YOUR_GUILD_ID"
+
+[models]
+default         = "qwen3:30b-a3b"
+coding          = "qwen2.5-coder:32b"
+complex         = "glm-4.7-flash"
+ollama_base_url = "http://host.docker.internal:11434/v1"
+
+[schedule]
+timezone           = "America/New_York"
+email_triage_cron  = "0 7 * * *"
+daily_summary_cron = "0 21 * * *"
+
+[[email.accounts]]
+name         = "gmail"
+host         = "imap.gmail.com"
+port         = 993
+username     = "you@gmail.com"
+password_env = "GMAIL_APP_PASSWORD"
+ssl          = true
+folders      = ["INBOX"]
