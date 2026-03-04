@@ -1,0 +1,78 @@
+services:
+  ai-hub:
+    build:
+      context: ../hub
+      dockerfile: Dockerfile
+    image: ai-hub:latest
+    restart: unless-stopped
+    depends_on:
+      temporal:
+        condition: service_healthy
+    env_file:
+      - /etc/ai-hub/hub.env
+    environment:
+      - CONFIG_PATH=/app/config.toml
+      - STATE_DIR=/var/lib/ai-hub
+      - TEMPORAL_ADDRESS=temporal:7233
+    volumes:
+      - /opt/ai-hub/config.toml:/app/config.toml:ro
+      - hub-state:/var/lib/ai-hub
+      - /var/run/docker.sock:/var/run/docker.sock
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:8080"
+    environment:
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - open-webui:/app/backend/data
+
+  temporal:
+    image: temporalio/auto-setup:latest
+    restart: unless-stopped
+    depends_on:
+      postgresql:
+        condition: service_healthy
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_SEEDS=postgresql
+    ports:
+      - "127.0.0.1:7233:7233"
+      - "127.0.0.1:8080:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "tctl", "--address", "temporal:7233", "cluster", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  postgresql:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_PASSWORD=temporal
+      - POSTGRES_USER=temporal
+      - POSTGRES_DB=temporal
+    volumes:
+      - temporal-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  hub-state:
+  open-webui:
+  temporal-db:
