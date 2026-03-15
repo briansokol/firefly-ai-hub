@@ -77,22 +77,27 @@ Last updated: 2026-02-28
 - [x] `npm run build && npm test` → no errors
 
 ### 6. Deploy & Start Full Stack
-- [ ] Create `/etc/ai-hub/hub.env` (mode 600), fill in secrets
-- [ ] Run deploy: `bash deploy/deploy.sh`
-- [ ] Copy and edit config: `sudo cp /opt/ai-hub/config.toml.example /opt/ai-hub/config.toml`
-- [ ] Run install: `bash deploy/install-systemd.sh`
-- [ ] Enable and start: `sudo systemctl enable --now ai-hub`
+- [x] Create `/etc/ai-hub/hub.env` (mode 600), fill in secrets
+- [x] Run deploy: `bash deploy/deploy.sh`
+- [x] Copy and edit config: `sudo cp /opt/ai-hub/config.toml.example /opt/ai-hub/config.toml`
+- [x] Run install: `bash deploy/install-systemd.sh`
+- [x] Enable and start: `sudo systemctl enable --now ai-hub`
 - [ ] Verify hub: `docker compose -f /opt/ai-hub/docker-compose.yml logs ai-hub` → "AI Hub running"
 - [ ] Verify Open WebUI: `curl http://localhost:3000` → HTTP 200
+  > BLOCKED: Docker can't set up DNAT rule for open-webui port 3000.
+  > Error: "Extension DNAT revision 0 not supported, missing kernel module?"
+  > Cause: legacy iptables installed; switched to iptables-nft but issue persists.
+  > Next step: reboot (in progress) — nftables modules should load cleanly on fresh boot.
+  > If still broken after reboot: check `lsmod | grep nf_nat`, check `iptables --version`.
 
 ### 7. Discord Bot Setup
-- [ ] Create Discord application at discord.com/developers
-- [ ] Enable Message Content Intent (Bot → Privileged Gateway Intents)
-- [ ] Generate bot token → add to `/etc/ai-hub/hub.env`
-- [ ] Create Discord server with channels: `#general`, `#coding`, `#email`, `#alerts`, `#daily-summary`, `#admin`
-- [ ] Invite bot with scopes `bot`, permissions: Send Messages, Read Message History, Embed Links
-- [ ] Add your Discord user ID and guild ID to `/opt/ai-hub/config.toml`
-- [ ] Restart service: `sudo systemctl restart ai-hub`
+- [x] Create Discord application at discord.com/developers
+- [x] Enable Message Content Intent (Bot → Privileged Gateway Intents)
+- [x] Generate bot token → add to `/etc/ai-hub/hub.env`
+- [x] Create Discord server with channels: `#general`, `#coding`, `#email`, `#alerts`, `#daily-summary`, `#admin`
+- [x] Invite bot with scopes `bot`, permissions: Send Messages, Read Message History, Embed Links
+- [x] Add your Discord user ID and guild ID to `/opt/ai-hub/config.toml`
+- [ ] Restart service: `sudo systemctl restart ai-hub` (blocked on Task 6)
 
 ### 8. End-to-End Validation
 - [ ] Send @mention in `#general` → verify Ollama response (qwen3:30b-a3b)
