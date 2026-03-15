@@ -43,7 +43,7 @@ async function main() {
   console.log('AI Hub running. Temporal schedules registered.');
 
   process.on('SIGTERM', () => {
-    rgbManager.reset();
+    void rgbManager.reset();
     void worker.shutdown();
     stateStore.close();
     discordClient.destroy();
