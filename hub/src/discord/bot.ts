@@ -1,9 +1,16 @@
+import { execFile } from 'node:child_process';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Client, GatewayIntentBits, Partials } from 'discord.js';
 import { Client as TemporalClient } from '@temporalio/client';
 import type { Config } from '../types.js';
 import { getDiscordToken } from '../config.js';
-import { isAllowed, stripMention, resolveRoute } from './router.js';
+import { isAllowed, stripMention, resolveRoute, parseRgbCommand } from './router.js';
 import type { ChatWorkflow } from '../temporal/workflow-types.js';
+import { RgbStateManager } from '../rgb.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const RGB_SET = path.resolve(__dirname, '../../../rgb/rgb-set');
 
 const SYSTEM_PROMPT = 'You are a helpful AI assistant running on a private home server.';
 const MAX_MSG_LENGTH = 2000;
@@ -19,7 +26,7 @@ function splitMessage(text: string): string[] {
   return chunks;
 }
 
-export function createDiscordBot(config: Config, temporalClient: TemporalClient): Client {
+export function createDiscordBot(config: Config, temporalClient: TemporalClient, rgbManager: RgbStateManager): Client {
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -40,18 +47,31 @@ export function createDiscordBot(config: Config, temporalClient: TemporalClient)
     const rawContent = isDM ? message.content : stripMention(message.content);
     if (!rawContent) return;
 
+    const rgbPreset = parseRgbCommand(rawContent);
+    if (rgbPreset !== null) {
+      execFile(RGB_SET, [rgbPreset], (err) => {
+        if (err) {
+          message.reply(`RGB error: ${err.message}`).catch(() => {});
+        } else {
+          message.reply(`RGB set to **${rgbPreset}**`).catch(() => {});
+        }
+      });
+      return;
+    }
+
     const channelName = isDM
       ? 'general'
       : ('name' in message.channel ? message.channel.name : 'general');
 
     const route = resolveRoute(channelName, rawContent, config);
 
+    rgbManager.startProcessing();
     try {
       const reply = await temporalClient.workflow.execute<ChatWorkflow>(
         'chatWorkflow',
         {
           args: [route.model, SYSTEM_PROMPT, route.content],
-          taskQueue: 'ai-hub',
+          taskQueue: 'firefly-ai-hub',
           workflowId: `chat-${message.id}`,
         },
       );
@@ -60,6 +80,8 @@ export function createDiscordBot(config: Config, temporalClient: TemporalClient)
       }
     } catch {
       await message.reply('⚠️ Model unavailable, try again in a moment.');
+    } finally {
+      rgbManager.endProcessing();
     }
   });
 
