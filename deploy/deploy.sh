@@ -12,7 +12,8 @@ if [[ ! -d "$OPT_DIR" ]]; then
   echo "Error: $OPT_DIR does not exist. Run install-systemd.sh first." >&2
   exit 1
 fi
-cp "$REPO_ROOT/deploy/docker-compose.yml" "$OPT_DIR/docker-compose.yml"
+sudo cp "$REPO_ROOT/deploy/docker-compose.yml" "$OPT_DIR/docker-compose.yml"
+sudo cp "$REPO_ROOT/deploy/config.toml.example" "$OPT_DIR/config.toml.example"
 
 echo "==> Checking if ai-hub service is running..."
 if systemctl is-active --quiet ai-hub; then
