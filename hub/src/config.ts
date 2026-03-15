@@ -13,9 +13,7 @@ export function loadConfig(): Config {
   const raw = fs.readFileSync(configPath, 'utf8');
   const parsed = parse(raw) as unknown as Config;
   requireEnv(parsed.discord.token_env);
-  for (const account of parsed.email.accounts) {
-    requireEnv(account.password_env);
-  }
+  for (const account of parsed.email.accounts) requireEnv(account.password_env);
   return parsed;
 }
 
