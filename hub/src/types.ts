@@ -31,9 +31,24 @@ export interface EmailConfig {
   accounts: EmailAccount[];
 }
 
+export interface ShortsConfig {
+  workspace_dir: string;
+  max_clips: number;
+  peak_threshold: number;
+  output_channel: string;
+  scoring_model: string;
+  window_size: number;
+  window_overlap: number;
+  transcription: {
+    model: string;
+    language: string;
+  };
+}
+
 export interface Config {
   discord: DiscordConfig;
   models: ModelsConfig;
   schedule: ScheduleConfig;
   email: EmailConfig;
+  shorts?: ShortsConfig;
 }
