@@ -37,6 +37,7 @@ export interface ShortsConfig {
   peak_threshold: number;
   output_channel: string;
   scoring_model: string;
+  screening_model?: string;
   window_size: number;
   window_overlap: number;
   transcription: {

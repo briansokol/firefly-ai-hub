@@ -59,6 +59,8 @@ export async function shortsAnalysisWorkflow(
       shortsConfig.scoring_model,
       shortsConfig.window_size,
       shortsConfig.window_overlap,
+      videoMeta.title,
+      shortsConfig.screening_model,
     ),
     suggestTitles(transcript, shortsConfig.scoring_model),
   ]);

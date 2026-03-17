@@ -228,9 +228,11 @@ export function createActivities(deps: ActivityDeps) {
       scoringModel: string,
       windowSize?: number,
       windowOverlap?: number,
+      videoTitle?: string,
+      screeningModel?: string,
     ): Promise<Candidate[]> {
       const model = scoringModel || config.models.default;
-      return scoreCandidates(peaks, transcript, workspacePath, maxClips, ollamaClient, model, windowSize, windowOverlap);
+      return scoreCandidates(peaks, transcript, workspacePath, maxClips, ollamaClient, model, windowSize, windowOverlap, videoTitle, screeningModel);
     },
 
     async suggestTitles(
@@ -252,7 +254,10 @@ export function createActivities(deps: ActivityDeps) {
 
       const titleLines = titles.map((t, i) => `${i + 1}. ${t}`).join('\n');
       const candidateLines = candidates
-        .map((c, i) => `${i + 1}. 🎬 \`${formatTimestamp(c.timestamp)}\` — "${c.quote}" (score: ${c.score.toFixed(1)})`)
+        .map((c, i) => {
+          const cat = c.category ? ` [${c.category}]` : '';
+          return `${i + 1}. 🎬 \`${formatTimestamp(c.timestamp)}\` — "${c.quote}" (score: ${c.score.toFixed(1)})${cat}`;
+        })
         .join('\n');
 
       const msg =
