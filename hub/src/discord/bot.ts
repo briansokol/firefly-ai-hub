@@ -5,7 +5,7 @@ import { Client, GatewayIntentBits, Partials } from 'discord.js';
 import { Client as TemporalClient } from '@temporalio/client';
 import type { Config } from '../types.js';
 import { getDiscordToken } from '../config.js';
-import { isAllowed, stripMention, resolveRoute, parseRgbCommand } from './router.js';
+import { isAllowed, stripMention, resolveRoute, parseRgbCommand, parseShortsCommand } from './router.js';
 import type { ChatWorkflow } from '../temporal/workflow-types.js';
 import { RgbStateManager } from '../rgb.js';
 
@@ -56,6 +56,21 @@ export function createDiscordBot(config: Config, temporalClient: TemporalClient,
           message.reply(`RGB set to **${rgbPreset}**`).catch(() => {});
         }
       });
+      return;
+    }
+
+    const shortsCmd = parseShortsCommand(rawContent);
+    if (shortsCmd !== null) {
+      if (!config.shorts) {
+        await message.reply('⚠️ Shorts processing is not configured.');
+        return;
+      }
+      await temporalClient.workflow.start('shortsAnalysisWorkflow', {
+        workflowId: `shorts-${message.id}`,
+        taskQueue: 'firefly-ai-hub',
+        args: [shortsCmd.source, config.shorts],
+      });
+      await message.reply("⏳ Processing started — I'll post results when done.");
       return;
     }
 

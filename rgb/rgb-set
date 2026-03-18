@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PRESET="${1:-work}"
+DIR="$(cd "$(dirname "$0")" && pwd)/presets"
+
+if [[ ! -f "$DIR/$PRESET.sh" ]]; then
+  echo "Unknown preset: $PRESET" >&2
+  echo "Available presets: $(ls "$DIR"/*.sh | xargs -n1 basename | sed 's/\.sh$//' | tr '\n' ' ')" >&2
+  exit 1
+fi
+
+exec "$DIR/$PRESET.sh"

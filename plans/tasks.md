@@ -82,13 +82,8 @@ Last updated: 2026-02-28
 - [x] Copy and edit config: `sudo cp /opt/ai-hub/config.toml.example /opt/ai-hub/config.toml`
 - [x] Run install: `bash deploy/install-systemd.sh`
 - [x] Enable and start: `sudo systemctl enable --now ai-hub`
-- [ ] Verify hub: `docker compose -f /opt/ai-hub/docker-compose.yml logs ai-hub` → "AI Hub running"
-- [ ] Verify Open WebUI: `curl http://localhost:3000` → HTTP 200
-  > BLOCKED: Docker can't set up DNAT rule for open-webui port 3000.
-  > Error: "Extension DNAT revision 0 not supported, missing kernel module?"
-  > Cause: legacy iptables installed; switched to iptables-nft but issue persists.
-  > Next step: reboot (in progress) — nftables modules should load cleanly on fresh boot.
-  > If still broken after reboot: check `lsmod | grep nf_nat`, check `iptables --version`.
+- [x] Verify hub: `docker compose -f /opt/ai-hub/docker-compose.yml logs ai-hub` → "AI Hub running"
+- [x] Verify Open WebUI: `curl http://localhost:3000` → HTTP 200
 
 ### 7. Discord Bot Setup
 - [x] Create Discord application at discord.com/developers
@@ -97,13 +92,13 @@ Last updated: 2026-02-28
 - [x] Create Discord server with channels: `#general`, `#coding`, `#email`, `#alerts`, `#daily-summary`, `#admin`
 - [x] Invite bot with scopes `bot`, permissions: Send Messages, Read Message History, Embed Links
 - [x] Add your Discord user ID and guild ID to `/opt/ai-hub/config.toml`
-- [ ] Restart service: `sudo systemctl restart ai-hub` (blocked on Task 6)
+- [x] Restart service: `sudo systemctl restart ai-hub` (blocked on Task 6)
 
-### 8. End-to-End Validation
-- [ ] Send @mention in `#general` → verify Ollama response (qwen3:30b-a3b)
-- [ ] Send @mention in `#coding` → verify coding model response (qwen2.5-coder:32b)
-- [ ] Send `/think <question>` → verify complex model response (glm-4.7-flash)
-- [ ] Verify non-allowlisted user is silently ignored
+### 8. End-to-End Validation ✓
+- [x] Send @mention in `#general` → verify Ollama response (qwen3:30b-a3b)
+- [x] Send @mention in `#coding` → verify coding model response (qwen2.5-coder:32b)
+- [x] Send `/think <question>` → verify complex model response (glm-4.7-flash)
+- [x] Verify non-allowlisted user is silently ignored
 
 ---
 

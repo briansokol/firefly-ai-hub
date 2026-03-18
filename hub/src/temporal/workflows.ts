@@ -10,6 +10,7 @@ const {
   updateLastUid,
   generateDailySummary,
   postDailySummary,
+  setRgbPreset,
 } = proxyActivities<Activities>({
   startToCloseTimeout: '5 minutes',
   retry: {
@@ -49,3 +50,9 @@ export async function dailySummaryWorkflow(): Promise<void> {
   const summary = await generateDailySummary();
   await postDailySummary(summary);
 }
+
+export async function rgbWorkflow(preset: import('./workflow-types.js').RgbPreset): Promise<void> {
+  await setRgbPreset(preset);
+}
+
+export { shortsAnalysisWorkflow } from '../shorts/workflow.js';

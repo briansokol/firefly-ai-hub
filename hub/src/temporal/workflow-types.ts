@@ -11,3 +11,11 @@ export type ChatWorkflow = (
 export type EmailTriageWorkflow = (accountName: string) => Promise<void>;
 
 export type DailySummaryWorkflow = () => Promise<void>;
+
+export type RgbPreset = 'work' | 'night' | 'gaming' | 'off';
+export type RgbWorkflow = (preset: RgbPreset) => Promise<void>;
+
+export type ShortsAnalysisWorkflow = (
+  source: string,
+  shortsConfig: import('../types.js').ShortsConfig,
+) => Promise<void>;

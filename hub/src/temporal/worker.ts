@@ -9,7 +9,7 @@ export async function createWorker(deps: ActivityDeps): Promise<Worker> {
   return Worker.create({
     connection,
     namespace: 'default',
-    taskQueue: 'ai-hub',
+    taskQueue: 'firefly-ai-hub',
     workflowsPath: new URL('./workflows.js', import.meta.url).pathname,
     activities: createActivities(deps),
   });

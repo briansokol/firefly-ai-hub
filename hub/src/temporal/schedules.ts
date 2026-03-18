@@ -29,7 +29,7 @@ async function ensureSchedule(
       type: 'startWorkflow',
       workflowType,
       args,
-      taskQueue: 'ai-hub',
+      taskQueue: 'firefly-ai-hub',
     },
     policies: {
       overlap: ScheduleOverlapPolicy.SKIP,
@@ -58,4 +58,9 @@ export async function registerSchedules(config: Config, client: Client): Promise
     'dailySummaryWorkflow',
     [],
   );
+
+  const tz = config.schedule.timezone;
+  await ensureSchedule(client, 'rgb-work',  { cronExpression: '0 8 * * 1-5', timezone: tz }, 'rgbWorkflow', ['work']);
+  await ensureSchedule(client, 'rgb-night', { cronExpression: '0 21 * * *',   timezone: tz }, 'rgbWorkflow', ['night']);
+  await ensureSchedule(client, 'rgb-off',   { cronExpression: '0 0 * * *',    timezone: tz }, 'rgbWorkflow', ['off']);
 }

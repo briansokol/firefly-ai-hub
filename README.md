@@ -25,7 +25,7 @@ sudo systemctl enable --now ollama
 # Drop-in config: sudo systemctl edit ollama
 # Added:
 # [Service]
-# Environment=OLLAMA_HOST=127.0.0.1:11434
+# Environment=OLLAMA_HOST=0.0.0.0:11434
 # Environment=OLLAMA_MAX_VRAM=22
 # Environment=OLLAMA_KEEP_ALIVE=10m
 
@@ -33,6 +33,11 @@ ollama pull qwen3:30b-a3b
 ollama pull qwen2.5-coder:32b
 ollama pull glm-4.7-flash
 ```
+
+> **Note:** `OLLAMA_HOST=0.0.0.0` is required so Docker containers can reach Ollama via
+> `host.docker.internal`. Using `127.0.0.1` (loopback only) causes "Model unavailable" errors
+> from within the ai-hub container even though `extra_hosts: host-gateway` is set — the gateway
+> IP is not loopback.
 
 ### Docker
 
@@ -122,6 +127,44 @@ bash deploy/deploy.sh
 
 ---
 
+## Troubleshooting
+
+### `ERR_DLOPEN_FAILED` — Temporal core-bridge native module fails to load
+
+**Symptom:** `Error loading shared library ld-linux-x86-64.so.2: No such file or directory`
+
+**Cause:** `@temporalio/core-bridge` ships a prebuilt native binary targeting glibc
+(`x86_64-unknown-linux-gnu`). Alpine-based Docker images use musl libc, which is incompatible.
+
+**Fix:** Use `node:22-slim` (Debian/glibc) instead of `node:22-alpine` in `hub/Dockerfile`.
+
+---
+
+### Bot responds "Model unavailable" — Ollama unreachable from container
+
+**Symptom:** Discord bot replies with ⚠️ Model unavailable despite Ollama running on the host.
+
+**Cause:** Ollama was bound to `127.0.0.1:11434` (loopback only). Docker containers reach the
+host via the bridge gateway IP (via `host.docker.internal`), which is not loopback — so
+connections are refused even with `extra_hosts: host-gateway` configured.
+
+**Fix:** Set `OLLAMA_HOST=0.0.0.0:11434` in the Ollama systemd drop-in:
+
+```bash
+sudo systemctl edit ollama
+# Set: Environment=OLLAMA_HOST=0.0.0.0:11434
+sudo systemctl restart ollama
+```
+
+Verify from inside the container:
+
+```bash
+docker exec ai-hub-ai-hub-1 node -e \
+  "fetch('http://host.docker.internal:11434/api/tags').then(r=>r.json()).then(d=>console.log(d.models?.map(m=>m.name))).catch(e=>console.error(e.message))"
+```
+
+---
+
 ## Stack
 
 | Service | Port | Notes |
@@ -131,4 +174,4 @@ bash deploy/deploy.sh
 | temporal | 127.0.0.1:7233 | Workflow engine |
 | temporal UI | 127.0.0.1:8080 | Temporal web dashboard |
 | postgresql | — | Internal only (Temporal backend) |
-| ollama | 127.0.0.1:11434 | GPU inference (host, not Docker) |
+| ollama | 0.0.0.0:11434 | GPU inference (host, not Docker) — binds all interfaces so Docker can reach it |

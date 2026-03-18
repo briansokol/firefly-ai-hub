@@ -1,7 +1,7 @@
 services:
   ai-hub:
     build:
-      context: ../hub
+      context: /home/bsokol/firefly-ai-hub/hub
       dockerfile: Dockerfile
     image: ai-hub:latest
     restart: unless-stopped
@@ -20,6 +20,13 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
@@ -32,6 +39,17 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - open-webui:/app/backend/data
+
+  temporal-ui:
+    image: temporalio/ui:latest
+    restart: unless-stopped
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+    ports:
+      - "8080:8080"
 
   temporal:
     image: temporalio/auto-setup:latest
@@ -47,7 +65,6 @@ services:
       - POSTGRES_SEEDS=postgresql
     ports:
       - "127.0.0.1:7233:7233"
-      - "127.0.0.1:8080:8080"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
