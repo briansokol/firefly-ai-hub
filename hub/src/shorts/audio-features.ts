@@ -1,24 +1,31 @@
-import type { AudioPeak, TranscriptWord, FeatureVector, AudioFeatureSummary } from './types.js';
+import type {
+  AudioPeak, TranscriptWord, FeatureVector, AudioFeatureSummary,
+  AudioEvent, ProsodyBucket,
+} from './types.js';
 
 const ROLLING_AVG_WINDOW = 10; // seconds for rolling LUFS average
 const SILENCE_GAP_THRESHOLD = 1.5; // seconds of silence before a loud moment
 const SPEECH_DENSITY_WINDOW = 3; // seconds for measuring rapid speech bursts
 
 /**
- * Compute per-second audio features from existing peaks and transcript data.
- * No new subprocesses — purely derived from data the pipeline already collects.
+ * Compute per-second audio features from peaks, transcript, and optional
+ * Phase 2 signals (audio events from YAMNet, prosody from parselmouth).
  */
 export function computeAudioFeatures(
   peaks: AudioPeak[],
   transcript: TranscriptWord[],
+  audioEvents?: AudioEvent[],
+  prosody?: ProsodyBucket[],
 ): Map<number, FeatureVector> {
   const features = new Map<number, FeatureVector>();
   if (peaks.length === 0 && transcript.length === 0) return features;
 
-  // Determine time range from both sources
+  // Determine time range from all sources
   const maxTime = Math.ceil(Math.max(
     peaks.length > 0 ? peaks[peaks.length - 1].timestamp : 0,
     transcript.length > 0 ? transcript[transcript.length - 1].end : 0,
+    audioEvents?.length ? audioEvents[audioEvents.length - 1].timestamp : 0,
+    prosody?.length ? prosody[prosody.length - 1].timestamp : 0,
   ));
 
   // Pre-index peaks by second for fast lookup
@@ -31,12 +38,39 @@ export function computeAudioFeatures(
     }
   }
 
+  // Pre-index audio events by second (keep highest confidence per second)
+  const eventBySecond = new Map<number, { confidence: number; event: string }>();
+  if (audioEvents) {
+    for (const ev of audioEvents) {
+      const sec = Math.floor(ev.timestamp);
+      const existing = eventBySecond.get(sec);
+      if (!existing || ev.confidence > existing.confidence) {
+        eventBySecond.set(sec, { confidence: ev.confidence, event: ev.event });
+      }
+    }
+  }
+
+  // Pre-index prosody by second
+  const prosodyBySecond = new Map<number, ProsodyBucket>();
+  if (prosody) {
+    for (const bucket of prosody) {
+      prosodyBySecond.set(Math.floor(bucket.timestamp), bucket);
+    }
+  }
+
   for (let t = 0; t <= maxTime; t++) {
+    const ev = eventBySecond.get(t);
+    const pros = prosodyBySecond.get(t);
+
     features.set(t, {
       speechRate: computeSpeechRate(transcript, t),
       volumeDelta: computeVolumeDelta(peakBySecond, t),
       silenceToLoud: detectSilenceToLoud(transcript, peakBySecond, t),
       speechDensity: computeSpeechDensity(transcript, t),
+      laughConfidence: ev?.event === 'laughter' ? ev.confidence : 0,
+      reactionType: ev?.event,
+      pitchRise: pros?.pitch_rise ?? 0,
+      energy: pros?.energy ?? 0,
     });
   }
 
@@ -78,15 +112,11 @@ function detectSilenceToLoud(
   peakBySecond: Map<number, number>,
   t: number,
 ): boolean {
-  // Need a peak at this second
   if (!peakBySecond.has(t)) return false;
-
-  // Check for a speech gap before this moment
   const gapStart = t - SILENCE_GAP_THRESHOLD;
   const hasRecentSpeech = transcript.some(
     (w) => w.end >= gapStart && w.end <= t && w.start >= gapStart,
   );
-
   return !hasRecentSpeech;
 }
 
@@ -119,7 +149,14 @@ export function summarizeFeaturesForWindow(
   let peakVolumeDelta = 0;
   let hasSilenceToLoud = false;
   let sumSpeechDensity = 0;
+  let peakLaughConfidence = 0;
+  let sumPitchRise = 0;
+  let peakPitchRise = 0;
+  let sumEnergy = 0;
   let count = 0;
+
+  // Track reaction types for dominant reaction
+  const reactionCounts = new Map<string, number>();
 
   for (let t = start; t <= end; t++) {
     const fv = features.get(t);
@@ -131,6 +168,13 @@ export function summarizeFeaturesForWindow(
     if (fv.volumeDelta > peakVolumeDelta) peakVolumeDelta = fv.volumeDelta;
     if (fv.silenceToLoud) hasSilenceToLoud = true;
     sumSpeechDensity += fv.speechDensity;
+    if (fv.laughConfidence > peakLaughConfidence) peakLaughConfidence = fv.laughConfidence;
+    sumPitchRise += fv.pitchRise;
+    if (fv.pitchRise > peakPitchRise) peakPitchRise = fv.pitchRise;
+    sumEnergy += fv.energy;
+    if (fv.reactionType) {
+      reactionCounts.set(fv.reactionType, (reactionCounts.get(fv.reactionType) ?? 0) + 1);
+    }
   }
 
   if (count === 0) {
@@ -141,7 +185,21 @@ export function summarizeFeaturesForWindow(
       peakVolumeDelta: 0,
       hasSilenceToLoud: false,
       avgSpeechDensity: 0,
+      peakLaughConfidence: 0,
+      avgPitchRise: 0,
+      peakPitchRise: 0,
+      avgEnergy: 0,
     };
+  }
+
+  // Find dominant reaction type
+  let dominantReaction: string | undefined;
+  let maxReactionCount = 0;
+  for (const [reaction, cnt] of reactionCounts) {
+    if (cnt > maxReactionCount) {
+      maxReactionCount = cnt;
+      dominantReaction = reaction;
+    }
   }
 
   return {
@@ -151,6 +209,11 @@ export function summarizeFeaturesForWindow(
     peakVolumeDelta,
     hasSilenceToLoud,
     avgSpeechDensity: sumSpeechDensity / count,
+    peakLaughConfidence,
+    dominantReaction,
+    avgPitchRise: sumPitchRise / count,
+    peakPitchRise,
+    avgEnergy: sumEnergy / count,
   };
 }
 
@@ -166,6 +229,18 @@ export function formatFeatureSummary(summary: AudioFeatureSummary): string {
   }
   if (summary.avgSpeechDensity > 2) {
     parts.push(`high speech density: ${summary.avgSpeechDensity.toFixed(1)} w/s (rapid/overlapping speech)`);
+  }
+  if (summary.peakLaughConfidence > 0) {
+    parts.push(`laughter detected (confidence: ${summary.peakLaughConfidence.toFixed(2)})`);
+  }
+  if (summary.dominantReaction && summary.dominantReaction !== 'laughter') {
+    parts.push(`${summary.dominantReaction} detected`);
+  }
+  if (summary.peakPitchRise > 50) {
+    parts.push(`vocal excitement: pitch ${summary.peakPitchRise.toFixed(0)}Hz above baseline`);
+  }
+  if (summary.avgEnergy > 1.3) {
+    parts.push(`high vocal energy: ${summary.avgEnergy.toFixed(1)}x average`);
   }
   return `Audio context: ${parts.join(', ')}`;
 }

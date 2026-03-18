@@ -229,14 +229,25 @@ describe('summarizeFeaturesForWindow', () => {
   });
 });
 
+const baseSummary = {
+  avgSpeechRate: 0,
+  peakSpeechRate: 0,
+  avgVolumeDelta: 0,
+  peakVolumeDelta: 0,
+  hasSilenceToLoud: false,
+  avgSpeechDensity: 0,
+  peakLaughConfidence: 0,
+  avgPitchRise: 0,
+  peakPitchRise: 0,
+  avgEnergy: 0,
+};
+
 describe('formatFeatureSummary', () => {
   it('includes speech rate info', () => {
     const formatted = formatFeatureSummary({
+      ...baseSummary,
       avgSpeechRate: 2.5,
       peakSpeechRate: 4.0,
-      avgVolumeDelta: 0,
-      peakVolumeDelta: 0,
-      hasSilenceToLoud: false,
       avgSpeechDensity: 1.0,
     });
     expect(formatted).toContain('2.5 w/s');
@@ -245,13 +256,106 @@ describe('formatFeatureSummary', () => {
 
   it('includes silence-to-loud when detected', () => {
     const formatted = formatFeatureSummary({
-      avgSpeechRate: 0,
-      peakSpeechRate: 0,
-      avgVolumeDelta: 0,
-      peakVolumeDelta: 0,
+      ...baseSummary,
       hasSilenceToLoud: true,
-      avgSpeechDensity: 0,
     });
     expect(formatted).toContain('silence-to-loud');
+  });
+
+  it('includes laughter detection info', () => {
+    const formatted = formatFeatureSummary({
+      ...baseSummary,
+      peakLaughConfidence: 0.85,
+    });
+    expect(formatted).toContain('laughter detected');
+    expect(formatted).toContain('0.85');
+  });
+
+  it('includes pitch excitement info', () => {
+    const formatted = formatFeatureSummary({
+      ...baseSummary,
+      peakPitchRise: 120,
+    });
+    expect(formatted).toContain('vocal excitement');
+    expect(formatted).toContain('120Hz');
+  });
+
+  it('includes high energy info', () => {
+    const formatted = formatFeatureSummary({
+      ...baseSummary,
+      avgEnergy: 1.5,
+    });
+    expect(formatted).toContain('high vocal energy');
+    expect(formatted).toContain('1.5x');
+  });
+});
+
+// ── Phase 2: audio events + prosody integration ─────────────────────────────
+
+describe('computeAudioFeatures with Phase 2 signals', () => {
+  it('integrates audio events into feature vectors', () => {
+    const audioEvents = [
+      { timestamp: 5, event: 'laughter', class: 'Laughter', confidence: 0.82 },
+      { timestamp: 10, event: 'cheering', class: 'Cheering', confidence: 0.65 },
+    ];
+    const features = computeAudioFeatures(
+      [{ timestamp: 5, rms: -10 }],
+      [],
+      audioEvents,
+    );
+    expect(features.get(5)?.laughConfidence).toBe(0.82);
+    expect(features.get(5)?.reactionType).toBe('laughter');
+    expect(features.get(10)?.reactionType).toBe('cheering');
+    expect(features.get(10)?.laughConfidence).toBe(0); // cheering, not laughter
+  });
+
+  it('integrates prosody data into feature vectors', () => {
+    const prosody = [
+      { timestamp: 0, mean_pitch: 150, pitch_variance: 20, pitch_rise: 80, energy: 1.2 },
+      { timestamp: 1, mean_pitch: 200, pitch_variance: 50, pitch_rise: 130, energy: 1.8 },
+    ];
+    const features = computeAudioFeatures(
+      [{ timestamp: 0, rms: -15 }],
+      [],
+      [],
+      prosody,
+    );
+    expect(features.get(0)?.pitchRise).toBe(80);
+    expect(features.get(0)?.energy).toBe(1.2);
+    expect(features.get(1)?.pitchRise).toBe(130);
+    expect(features.get(1)?.energy).toBe(1.8);
+  });
+
+  it('defaults Phase 2 fields to zero when not provided', () => {
+    const features = computeAudioFeatures(
+      [{ timestamp: 0, rms: -15 }],
+      [word('hi', 0, 0.5)],
+    );
+    expect(features.get(0)?.laughConfidence).toBe(0);
+    expect(features.get(0)?.pitchRise).toBe(0);
+    expect(features.get(0)?.energy).toBe(0);
+    expect(features.get(0)?.reactionType).toBeUndefined();
+  });
+
+  it('summarizes Phase 2 signals across a window', () => {
+    const audioEvents = [
+      { timestamp: 2, event: 'laughter', class: 'Laughter', confidence: 0.9 },
+      { timestamp: 4, event: 'laughter', class: 'Giggle', confidence: 0.6 },
+    ];
+    const prosody = [
+      { timestamp: 2, mean_pitch: 200, pitch_variance: 30, pitch_rise: 100, energy: 1.5 },
+      { timestamp: 4, mean_pitch: 180, pitch_variance: 20, pitch_rise: 60, energy: 1.1 },
+    ];
+    const features = computeAudioFeatures(
+      [{ timestamp: 2, rms: -10 }, { timestamp: 4, rms: -12 }],
+      [],
+      audioEvents,
+      prosody,
+    );
+    const summary = summarizeFeaturesForWindow(features, 0, 5);
+    expect(summary.peakLaughConfidence).toBe(0.9);
+    expect(summary.dominantReaction).toBe('laughter');
+    expect(summary.peakPitchRise).toBe(100);
+    expect(summary.avgEnergy).toBeGreaterThan(0);
   });
 });

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type OpenAI from 'openai';
-import type { AudioPeak, TranscriptWord, Candidate, ClipCategory, AudioFeatureSummary } from './types.js';
+import type { AudioPeak, TranscriptWord, Candidate, ClipCategory, AudioFeatureSummary, AudioEvent, ProsodyBucket } from './types.js';
 import { computeAudioFeatures, summarizeFeaturesForWindow, formatFeatureSummary } from './audio-features.js';
 import type { FeatureVector } from './types.js';
 
@@ -318,9 +318,11 @@ export async function identifyCandidates(
   windowOverlap = 15,
   videoTitle?: string,
   screeningModel?: string,
+  audioEvents?: AudioEvent[],
+  prosody?: ProsodyBucket[],
 ): Promise<Candidate[]> {
-  // Compute derived audio features
-  const features = computeAudioFeatures(peaks, transcript);
+  // Compute derived audio features (Phase 1 + optional Phase 2 signals)
+  const features = computeAudioFeatures(peaks, transcript, audioEvents, prosody);
   console.log(`[candidates] computed audio features for ${features.size} seconds`);
 
   // Determine scoring models for two-pass

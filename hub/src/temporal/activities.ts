@@ -12,13 +12,15 @@ import { fetchNewEmails } from '../email/imap.js';
 import { buildTriagePrompt, parseTriageResponse } from '../email/triage.js';
 import { getEmailPassword } from '../config.js';
 import type { RgbPreset } from './workflow-types.js';
-import type { VideoMeta, AudioPeak, TranscriptWord, Candidate } from '../shorts/types.js';
+import type { VideoMeta, AudioPeak, TranscriptWord, Candidate, AudioEvent, ProsodyBucket } from '../shorts/types.js';
 import { getVideoInfo } from '../shorts/ffprobe.js';
-import { extractAndAnalyzeAudio as analyzeAudio } from '../shorts/audio-analysis.js';
+import { extractAndAnalyzeAudio as analyzeAudio, extractAudioToWav, detectPeaks as detectAudioPeaks } from '../shorts/audio-analysis.js';
 import { transcribeAudio as runTranscription } from '../shorts/transcription.js';
 import { identifyCandidates as scoreCandidates } from '../shorts/candidates.js';
 import { suggestTitles as generateTitles } from '../shorts/titles.js';
 import { cleanupWorkspace as doCleanup } from '../shorts/cleanup.js';
+import { classifyAudioEvents as runClassifyAudio } from '../shorts/audio-classify.js';
+import { analyzeProsody as runAnalyzeProsody } from '../shorts/prosody.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RGB_SET = path.resolve(__dirname, '../../../rgb/rgb-set');
@@ -211,6 +213,20 @@ export function createActivities(deps: ActivityDeps) {
       return analyzeAudio(videoPath, workspacePath, peakThreshold);
     },
 
+    async extractAudio(
+      videoPath: string,
+      audioPath: string,
+    ): Promise<void> {
+      return extractAudioToWav(videoPath, audioPath);
+    },
+
+    async detectPeaks(
+      audioPath: string,
+      peakThreshold: number,
+    ): Promise<AudioPeak[]> {
+      return detectAudioPeaks(audioPath, peakThreshold);
+    },
+
     async transcribeAudio(
       videoPath: string,
       workspacePath: string,
@@ -218,6 +234,20 @@ export function createActivities(deps: ActivityDeps) {
       language: string,
     ): Promise<TranscriptWord[]> {
       return runTranscription(videoPath, workspacePath, transcriptionModel, language);
+    },
+
+    async classifyAudioEvents(
+      audioPath: string,
+      workspacePath: string,
+    ): Promise<AudioEvent[]> {
+      return runClassifyAudio(audioPath, workspacePath);
+    },
+
+    async analyzeProsody(
+      audioPath: string,
+      workspacePath: string,
+    ): Promise<ProsodyBucket[]> {
+      return runAnalyzeProsody(audioPath, workspacePath);
     },
 
     async identifyCandidates(
@@ -230,9 +260,11 @@ export function createActivities(deps: ActivityDeps) {
       windowOverlap?: number,
       videoTitle?: string,
       screeningModel?: string,
+      audioEvents?: AudioEvent[],
+      prosody?: ProsodyBucket[],
     ): Promise<Candidate[]> {
       const model = scoringModel || config.models.default;
-      return scoreCandidates(peaks, transcript, workspacePath, maxClips, ollamaClient, model, windowSize, windowOverlap, videoTitle, screeningModel);
+      return scoreCandidates(peaks, transcript, workspacePath, maxClips, ollamaClient, model, windowSize, windowOverlap, videoTitle, screeningModel, audioEvents, prosody);
     },
 
     async suggestTitles(
