@@ -17,9 +17,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg python3 python3-pip \
   && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
   && apt-get install -y --no-install-recommends nodejs \
+  && pip3 install --no-cache-dir --upgrade pip setuptools wheel \
   && pip3 install --no-cache-dir \
     faster-whisper yt-dlp \
-    tflite-runtime numpy parselmouth \
+    ai-edge-litert numpy praat-parselmouth \
   && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /app/dist ./dist

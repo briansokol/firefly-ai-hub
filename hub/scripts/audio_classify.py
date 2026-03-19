@@ -106,17 +106,20 @@ def classify_audio(
 ) -> list[dict]:
     """Run YAMNet on audio file, return timestamped events above threshold."""
     try:
-        import tflite_runtime.interpreter as tflite
+        from ai_edge_litert import interpreter as tflite  # type: ignore[import]
     except ImportError:
         try:
-            import tensorflow.lite as tflite  # type: ignore[import]
+            import tflite_runtime.interpreter as tflite  # type: ignore[import]
         except ImportError:
-            print(
-                'ERROR: Neither tflite-runtime nor tensorflow is installed.\n'
-                'Run: pip install tflite-runtime',
-                file=sys.stderr,
-            )
-            sys.exit(1)
+            try:
+                import tensorflow.lite as tflite  # type: ignore[import]
+            except ImportError:
+                print(
+                    'ERROR: No TFLite runtime found.\n'
+                    'Run: pip install ai-edge-litert',
+                    file=sys.stderr,
+                )
+                sys.exit(1)
 
     model_path = download_model()
     class_names = load_class_names()
