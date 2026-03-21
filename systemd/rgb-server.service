@@ -1,0 +1,15 @@
+[Unit]
+Description=RGB control server (Unix socket for AI Hub container)
+Before=ai-hub.service
+PartOf=ai-hub.service
+
+[Service]
+Type=simple
+ExecStartPre=/usr/bin/mkdir -p /var/run/ai-hub
+ExecStart=/usr/bin/node /home/bsokol/firefly-ai-hub/rgb/rgb-server.mjs
+Environment=RGB_SOCKET=/var/run/ai-hub/rgb.sock
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=ai-hub.service

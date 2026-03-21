@@ -35,6 +35,14 @@ export function parseShortsCommand(content: string): { source: string } | null {
   return { source };
 }
 
+export function parseShortsEditCommand(content: string): { workspaceName: string } | null {
+  const match = content.match(/^!shorts-edit\s+(.+)$/i);
+  if (!match) return null;
+  const workspaceName = match[1].trim();
+  if (!workspaceName) return null;
+  return { workspaceName };
+}
+
 export function resolveRoute(channelName: string, content: string, config: Config): Route {
   if (content.startsWith('/think ')) {
     return {

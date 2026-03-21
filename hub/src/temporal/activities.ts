@@ -1,7 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import type OpenAI from 'openai';
 import type { Client as DiscordClient } from 'discord.js';
 import type { Config } from '../types.js';
@@ -12,7 +11,8 @@ import { fetchNewEmails } from '../email/imap.js';
 import { buildTriagePrompt, parseTriageResponse } from '../email/triage.js';
 import { getEmailPassword } from '../config.js';
 import type { RgbPreset } from './workflow-types.js';
-import type { VideoMeta, AudioPeak, TranscriptWord, Candidate, AudioEvent, ProsodyBucket } from '../shorts/types.js';
+import { setRgb } from '../rgb-client.js';
+import type { VideoMeta, AudioPeak, TranscriptWord, Candidate, ConfirmedCandidate, AudioEvent, ProsodyBucket, ClipResult, ShortsCheckpoint } from '../shorts/types.js';
 import { getVideoInfo } from '../shorts/ffprobe.js';
 import { extractAndAnalyzeAudio as analyzeAudio, extractAudioToWav, detectPeaks as detectAudioPeaks } from '../shorts/audio-analysis.js';
 import { transcribeAudio as runTranscription } from '../shorts/transcription.js';
@@ -21,9 +21,22 @@ import { suggestTitles as generateTitles } from '../shorts/titles.js';
 import { cleanupWorkspace as doCleanup } from '../shorts/cleanup.js';
 import { classifyAudioEvents as runClassifyAudio } from '../shorts/audio-classify.js';
 import { analyzeProsody as runAnalyzeProsody } from '../shorts/prosody.js';
+import { confirmCandidatesWithHostedAI as runHostedScoring } from '../shorts/hosted-scoring.js';
+import { computeClipBounds, processClip } from '../shorts/clip-processing.js';
+import type { SubtitleConfig } from '../types.js';
+import { getHostedScoringApiKey } from '../config.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const RGB_SET = path.resolve(__dirname, '../../../rgb/rgb-set');
+/** Convert a video title into a filesystem-safe folder name. */
+function slugifyTitle(title: string): string {
+  const beforePipe = title.split('|')[0].trim();
+  return beforePipe
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, '')  // strip special characters
+    .replace(/\s+/g, '-')           // spaces to dashes
+    .replace(/-+/g, '-')            // collapse consecutive dashes
+    .replace(/^-|-$/g, '')          // trim leading/trailing dashes
+    || 'untitled';
+}
 
 export interface ActivityDeps {
   ollamaClient: OpenAI;
@@ -116,12 +129,7 @@ export function createActivities(deps: ActivityDeps) {
     },
 
     async setRgbPreset(preset: RgbPreset): Promise<void> {
-      await new Promise<void>((resolve, reject) => {
-        execFile(RGB_SET, [preset], (err) => {
-          if (err) reject(err);
-          else resolve();
-        });
-      });
+      await setRgb(preset);
     },
 
     // ── Shorts Phase 1 activities ──────────────────────────────────────────
@@ -132,18 +140,11 @@ export function createActivities(deps: ActivityDeps) {
     },
 
     async resolveVideo(source: string, workspaceDir: string): Promise<VideoMeta> {
-      const timestamp = Date.now();
-      const workspacePath = path.join(workspaceDir, `shorts-${timestamp}`);
-      fs.mkdirSync(workspacePath, { recursive: true });
-      console.log(`[resolveVideo] workspace: ${workspacePath}`);
-
       let videoPath: string;
       let title: string;
 
       if (source.startsWith('http')) {
-        videoPath = path.join(workspacePath, 'source.mp4');
-
-        // Get title from yt-dlp metadata (separate from download for reliability)
+        // Get title from yt-dlp metadata first (needed for workspace name)
         console.log('[resolveVideo] fetching video metadata via yt-dlp --dump-json');
         title = await new Promise<string>((resolve) => {
           execFile(
@@ -166,6 +167,13 @@ export function createActivities(deps: ActivityDeps) {
           );
         });
         console.log(`[resolveVideo] title: "${title}"`);
+
+        const folderName = slugifyTitle(title);
+        const workspacePath = path.join(workspaceDir, folderName);
+        fs.mkdirSync(workspacePath, { recursive: true });
+        console.log(`[resolveVideo] workspace: ${workspacePath}`);
+
+        videoPath = path.join(workspacePath, 'source.mp4');
 
         console.log(`[resolveVideo] starting yt-dlp download → ${videoPath}`);
         await new Promise<void>((resolve, reject) => {
@@ -192,17 +200,25 @@ export function createActivities(deps: ActivityDeps) {
             }
           });
         });
+
+        console.log('[resolveVideo] running ffprobe for duration');
+        const { duration } = await getVideoInfo(videoPath);
+        console.log(`[resolveVideo] done — title="${title}" duration=${duration.toFixed(1)}s`);
+        return { title, duration, videoPath, workspacePath };
       } else {
         console.log(`[resolveVideo] local file: ${source}`);
         videoPath = source;
         const info = await getVideoInfo(videoPath);
         title = info.title;
-      }
 
-      console.log('[resolveVideo] running ffprobe for duration');
-      const { duration } = await getVideoInfo(videoPath);
-      console.log(`[resolveVideo] done — title="${title}" duration=${duration.toFixed(1)}s`);
-      return { title, duration, videoPath, workspacePath };
+        const folderName = slugifyTitle(title);
+        const workspacePath = path.join(workspaceDir, folderName);
+        fs.mkdirSync(workspacePath, { recursive: true });
+        console.log(`[resolveVideo] workspace: ${workspacePath}`);
+
+        console.log(`[resolveVideo] done — title="${title}" duration=${info.duration.toFixed(1)}s`);
+        return { title, duration: info.duration, videoPath, workspacePath };
+      }
     },
 
     async extractAndAnalyzeAudio(
@@ -275,27 +291,83 @@ export function createActivities(deps: ActivityDeps) {
       return generateTitles(transcript, ollamaClient, model);
     },
 
+    async confirmCandidatesWithHostedAI(
+      candidates: Candidate[],
+      transcript: TranscriptWord[],
+      videoPath: string,
+      workspacePath: string,
+      videoTitle: string,
+      peaks: AudioPeak[],
+      audioEvents?: AudioEvent[],
+      prosody?: ProsodyBucket[],
+    ): Promise<ConfirmedCandidate[]> {
+      // Log incoming candidate timestamps for debugging NaN issues
+      console.log(`[confirmCandidatesWithHostedAI] incoming candidates: ${candidates.map((c, i) => `${i}:ts=${c.timestamp}`).join(', ')}`);
+
+      const shortsConfig = config.shorts;
+      if (!shortsConfig?.hosted_scoring?.enabled) {
+        // Return all candidates as confirmed with default crop
+        return candidates.map(c => ({
+          ...c,
+          confirmed: true,
+          actionPosition: 'center' as const,
+          cropOffset: 0.5,
+        }));
+      }
+
+      const apiKey = getHostedScoringApiKey(shortsConfig);
+      const results = await runHostedScoring({
+        candidates,
+        transcript,
+        videoPath,
+        workspacePath,
+        videoTitle,
+        peaks,
+        audioEvents,
+        prosody,
+        config: shortsConfig.hosted_scoring,
+        apiKey,
+      });
+
+      // Log outgoing timestamps to trace NaN propagation
+      console.log(`[confirmCandidatesWithHostedAI] results: ${results.map((c, i) => `${i}:ts=${c.timestamp},confirmed=${c.confirmed}`).join(', ')}`);
+
+      return results;
+    },
+
     async notifyDiscord(
       videoMeta: VideoMeta,
       titles: string[],
-      candidates: Candidate[],
+      candidates: ConfirmedCandidate[],
       channelName: string,
     ): Promise<void> {
       const channel = getTextChannel(channelName);
       if (!channel) return;
 
+      // Filter to confirmed candidates only (if hosted scoring ran)
+      const confirmed = candidates.filter(c => c.confirmed);
+
       const titleLines = titles.map((t, i) => `${i + 1}. ${t}`).join('\n');
-      const candidateLines = candidates
+      const candidateLines = confirmed
         .map((c, i) => {
           const cat = c.category ? ` [${c.category}]` : '';
-          return `${i + 1}. 🎬 \`${formatTimestamp(c.timestamp)}\` — "${c.quote}" (score: ${c.score.toFixed(1)})${cat}`;
+          const scoreDisplay = c.hostedScore != null
+            ? `(local: ${c.score.toFixed(1)}, hosted: ${c.hostedScore.toFixed(1)})`
+            : `(score: ${c.score.toFixed(1)})`;
+          const cropInfo = c.actionPosition ? ` | action: ${c.actionPosition}` : '';
+          const reasoning = c.hostedReasoning ? `\n   > ${c.hostedReasoning}` : '';
+          return `${i + 1}. 🎬 \`${formatTimestamp(c.timestamp)}\` — "${c.quote}" ${scoreDisplay}${cat}${cropInfo}${reasoning}`;
         })
         .join('\n');
+
+      const filteredNote = confirmed.length < candidates.length
+        ? `\n_${candidates.length - confirmed.length} candidate(s) filtered out by hosted AI_`
+        : '';
 
       const msg =
         `✅ Analysis complete for: **${videoMeta.title}**\n\n` +
         `**Suggested Episode Titles:**\n${titleLines}\n\n` +
-        `**Shorts Candidates (${candidates.length}):**\n${candidateLines}`;
+        `**Shorts Candidates (${confirmed.length}):**\n${candidateLines}${filteredNote}`;
 
       await channel.send(msg);
 
@@ -307,6 +379,151 @@ export function createActivities(deps: ActivityDeps) {
 
     async cleanupWorkspace(workspacePath: string): Promise<void> {
       return doCleanup(workspacePath);
+    },
+
+    // ── Shorts Phase 2 activities (editing) ──────────────────────────────────
+
+    async saveCheckpoint(
+      videoMeta: VideoMeta,
+      transcript: TranscriptWord[],
+      confirmedCandidates: ConfirmedCandidate[],
+      titles: string[],
+    ): Promise<void> {
+      const checkpoint: ShortsCheckpoint = {
+        version: 1,
+        createdAt: new Date().toISOString(),
+        videoMeta,
+        transcript,
+        confirmedCandidates,
+        titles,
+        shortsConfig: config.shorts!,
+      };
+      const checkpointPath = path.join(videoMeta.workspacePath, 'checkpoint.json');
+      fs.writeFileSync(checkpointPath, JSON.stringify(checkpoint, null, 2), 'utf8');
+      console.log(`[saveCheckpoint] Written to ${checkpointPath}`);
+    },
+
+    async loadCheckpoint(workspacePath: string): Promise<ShortsCheckpoint> {
+      const checkpointPath = workspacePath.endsWith('checkpoint.json')
+        ? workspacePath
+        : path.join(workspacePath, 'checkpoint.json');
+      const raw = fs.readFileSync(checkpointPath, 'utf8');
+      return JSON.parse(raw) as ShortsCheckpoint;
+    },
+
+    async generateAndProcessClip(
+      videoPath: string,
+      workspacePath: string,
+      candidate: ConfirmedCandidate,
+      candidateIndex: number,
+      transcript: TranscriptWord[],
+      subtitleConfig: SubtitleConfig | undefined,
+      videoDuration: number,
+      windowSize: number,
+      minDuration: number,
+      maxDuration: number,
+    ): Promise<ClipResult> {
+      // Validate numeric inputs — Temporal JSON serialization can silently
+      // turn undefined/NaN values into null, which becomes NaN in arithmetic
+      const ts = candidate.timestamp;
+      if (ts == null || Number.isNaN(ts)) {
+        throw new Error(
+          `[generateAndProcessClip] candidate ${candidateIndex} has invalid timestamp: ${ts} ` +
+          `(candidate keys: ${Object.keys(candidate).join(', ')}, ` +
+          `candidate: ${JSON.stringify(candidate).slice(0, 300)})`,
+        );
+      }
+      if (!Number.isFinite(videoDuration)) {
+        throw new Error(
+          `[generateAndProcessClip] invalid videoDuration: ${videoDuration}`,
+        );
+      }
+      if (!Number.isFinite(windowSize)) {
+        throw new Error(
+          `[generateAndProcessClip] invalid windowSize: ${windowSize}`,
+        );
+      }
+
+      const { start, end } = computeClipBounds(
+        ts,
+        windowSize,
+        minDuration,
+        maxDuration,
+        videoDuration,
+        transcript,
+      );
+      return processClip({
+        videoPath,
+        workspacePath,
+        candidate,
+        candidateIndex,
+        clipStart: start,
+        clipEnd: end,
+        transcript,
+        subtitleConfig,
+      });
+    },
+
+    async notifyDiscordWithClips(
+      videoMeta: VideoMeta,
+      titles: string[],
+      candidates: ConfirmedCandidate[],
+      clipResults: ClipResult[],
+      channelName: string,
+    ): Promise<void> {
+      const channel = getTextChannel(channelName);
+      if (!channel) return;
+
+      const confirmed = candidates.filter(c => c.confirmed);
+
+      const titleLines = titles.map((t, i) => `${i + 1}. ${t}`).join('\n');
+      const candidateLines = confirmed
+        .map((c, i) => {
+          const cat = c.category ? ` [${c.category}]` : '';
+          const scoreDisplay = c.hostedScore != null
+            ? `(local: ${c.score.toFixed(1)}, hosted: ${c.hostedScore.toFixed(1)})`
+            : `(score: ${c.score.toFixed(1)})`;
+          const cropInfo = c.actionPosition ? ` | action: ${c.actionPosition}` : '';
+          const clip = clipResults.find(r => r.candidateIndex === i);
+          const clipInfo = clip
+            ? ` | ${clip.duration.toFixed(0)}s (${formatTimestamp(clip.startTime)}→${formatTimestamp(clip.endTime)})`
+            : '';
+          const reasoning = c.hostedReasoning ? `\n   > ${c.hostedReasoning}` : '';
+          return `${i + 1}. 🎬 \`${formatTimestamp(c.timestamp)}\` — "${c.quote}" ${scoreDisplay}${cat}${cropInfo}${clipInfo}${reasoning}`;
+        })
+        .join('\n');
+
+      const filteredNote = confirmed.length < candidates.length
+        ? `\n_${candidates.length - confirmed.length} candidate(s) filtered out by hosted AI_`
+        : '';
+
+      const msg =
+        `✅ Shorts ready for: **${videoMeta.title}**\n\n` +
+        `**Suggested Episode Titles:**\n${titleLines}\n\n` +
+        `**Processed Clips (${clipResults.length}):**\n${candidateLines}${filteredNote}`;
+
+      await channel.send(msg);
+
+      // Upload clips to Discord (if under 25MB) or post NAS path
+      const MAX_DISCORD_SIZE = 25 * 1024 * 1024;
+      for (const clip of clipResults) {
+        if (!fs.existsSync(clip.outputPath)) continue;
+        const stats = fs.statSync(clip.outputPath);
+        if (stats.size <= MAX_DISCORD_SIZE) {
+          await channel.send({
+            files: [{
+              attachment: clip.outputPath,
+              name: `clip_${clip.candidateIndex + 1}.mp4`,
+            }],
+          });
+        } else {
+          await channel.send(`📁 Clip ${clip.candidateIndex + 1} too large for Discord (${(stats.size / 1024 / 1024).toFixed(1)}MB): \`${clip.outputPath}\``);
+        }
+      }
+
+      // Post workspace name for easy re-editing
+      const workspaceName = path.basename(videoMeta.workspacePath);
+      await channel.send(`💾 Workspace: \`${workspaceName}\`\nRe-edit with: \`!shorts-edit ${workspaceName}\``);
     },
   };
 }

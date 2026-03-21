@@ -2,8 +2,6 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SERVICE_SRC="$REPO_ROOT/systemd/ai-hub.service"
-SERVICE_DEST="/etc/systemd/system/ai-hub.service"
 OPT_DIR="/opt/ai-hub"
 
 if [[ $EUID -ne 0 ]]; then
@@ -15,9 +13,13 @@ echo "Creating $OPT_DIR..."
 mkdir -p "$OPT_DIR"
 chmod 755 "$OPT_DIR"
 
-echo "Installing systemd unit..."
-cp "$SERVICE_SRC" "$SERVICE_DEST"
-chmod 644 "$SERVICE_DEST"
+echo "Creating /var/run/ai-hub..."
+mkdir -p /var/run/ai-hub
+
+echo "Installing systemd units..."
+cp "$REPO_ROOT/systemd/ai-hub.service" /etc/systemd/system/ai-hub.service
+cp "$REPO_ROOT/systemd/rgb-server.service" /etc/systemd/system/rgb-server.service
+chmod 644 /etc/systemd/system/ai-hub.service /etc/systemd/system/rgb-server.service
 
 systemctl daemon-reload
 

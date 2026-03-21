@@ -31,6 +31,26 @@ export interface EmailConfig {
   accounts: EmailAccount[];
 }
 
+export interface HostedScoringConfig {
+  enabled: boolean;
+  provider: 'google' | 'anthropic';
+  model: string;
+  api_key_env: string;
+  max_candidates?: number;
+  confirm_clips?: boolean;
+}
+
+export interface SubtitleConfig {
+  font?: string;           // default "Impact"
+  font_size?: number;      // default 72
+  primary_color?: string;  // default "&H00FFFFFF" (white)
+  outline_color?: string;  // default "&H00000000" (black)
+  outline_width?: number;  // default 4
+  alignment?: number;      // default 2 (bottom-center)
+  margin_v?: number;       // default 80
+  uppercase?: boolean;     // default true
+}
+
 export interface ShortsConfig {
   workspace_dir: string;
   max_clips: number;
@@ -40,10 +60,14 @@ export interface ShortsConfig {
   screening_model?: string;
   window_size: number;
   window_overlap: number;
+  min_clip_duration?: number;  // default 15
+  max_clip_duration?: number;  // default 58
   transcription: {
     model: string;
     language: string;
   };
+  hosted_scoring?: HostedScoringConfig;
+  subtitles?: SubtitleConfig;
 }
 
 export interface Config {

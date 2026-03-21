@@ -1,101 +1,91 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Mock node:child_process before importing the module under test.
-// execFile is mocked to call its callback immediately (success).
-// promisify(execFile) wraps this same mock, so reset() resolves immediately too.
-vi.mock('node:child_process', () => ({
-  execFile: vi.fn((_cmd: string, _args: string[], cb: (err: Error | null) => void) => cb(null)),
+// Mock the rgb-client module so no real HTTP requests are made.
+const mockSetRgb = vi.fn<(preset: string) => Promise<void>>(() => Promise.resolve());
+vi.mock('../src/rgb-client.js', () => ({
+  setRgb: (...args: unknown[]) => mockSetRgb(...(args as [string])),
 }));
 
-import { execFile } from 'node:child_process';
 import { RgbStateManager } from '../src/rgb.js';
 
-const mockExecFile = vi.mocked(execFile);
-const RGB_SET = '/fake/rgb-set';
-
 beforeEach(() => {
-  mockExecFile.mockClear();
-  mockExecFile.mockImplementation(
-    (_cmd: string, _args: string[], cb: (err: Error | null) => void) => cb(null)
-  );
+  mockSetRgb.mockClear();
+  mockSetRgb.mockResolvedValue(undefined);
 });
 
 describe('RgbStateManager', () => {
   describe('startProcessing()', () => {
-    it('calls rgb-set processing on first call (0→1)', () => {
-      const mgr = new RgbStateManager(RGB_SET);
+    it('calls setRgb("processing") on first call (0→1)', () => {
+      const mgr = new RgbStateManager();
       mgr.startProcessing();
-      expect(mockExecFile).toHaveBeenCalledOnce();
-      expect(mockExecFile).toHaveBeenCalledWith(RGB_SET, ['processing'], expect.any(Function));
+      expect(mockSetRgb).toHaveBeenCalledOnce();
+      expect(mockSetRgb).toHaveBeenCalledWith('processing');
     });
 
-    it('does not call rgb-set on second call (1→2)', () => {
-      const mgr = new RgbStateManager(RGB_SET);
+    it('does not call setRgb on second call (1→2)', () => {
+      const mgr = new RgbStateManager();
       mgr.startProcessing();
-      mockExecFile.mockClear();
+      mockSetRgb.mockClear();
       mgr.startProcessing();
-      expect(mockExecFile).not.toHaveBeenCalled();
+      expect(mockSetRgb).not.toHaveBeenCalled();
     });
   });
 
   describe('endProcessing()', () => {
-    it('does not call rgb-set when going from 2→1', () => {
-      const mgr = new RgbStateManager(RGB_SET);
+    it('does not call setRgb when going from 2→1', () => {
+      const mgr = new RgbStateManager();
       mgr.startProcessing();
       mgr.startProcessing();
-      mockExecFile.mockClear();
+      mockSetRgb.mockClear();
       mgr.endProcessing();
-      expect(mockExecFile).not.toHaveBeenCalled();
+      expect(mockSetRgb).not.toHaveBeenCalled();
     });
 
-    it('calls rgb-set off when going from 1→0', () => {
-      const mgr = new RgbStateManager(RGB_SET);
+    it('calls setRgb("off") when going from 1→0', () => {
+      const mgr = new RgbStateManager();
       mgr.startProcessing();
-      mockExecFile.mockClear();
+      mockSetRgb.mockClear();
       mgr.endProcessing();
-      expect(mockExecFile).toHaveBeenCalledOnce();
-      expect(mockExecFile).toHaveBeenCalledWith(RGB_SET, ['off'], expect.any(Function));
+      expect(mockSetRgb).toHaveBeenCalledOnce();
+      expect(mockSetRgb).toHaveBeenCalledWith('off');
     });
 
     it('does not decrement below 0 and logs an error', () => {
-      const mgr = new RgbStateManager(RGB_SET);
+      const mgr = new RgbStateManager();
       const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
       mgr.endProcessing(); // already 0
-      expect(mockExecFile).not.toHaveBeenCalled();
+      expect(mockSetRgb).not.toHaveBeenCalled();
       expect(spy).toHaveBeenCalledWith(expect.stringContaining('endProcessing'));
       spy.mockRestore();
     });
   });
 
   describe('reset()', () => {
-    it('calls rgb-set off and resolves', async () => {
-      const mgr = new RgbStateManager(RGB_SET);
+    it('calls setRgb("off") and resolves', async () => {
+      const mgr = new RgbStateManager();
       mgr.startProcessing();
       mgr.startProcessing();
-      mockExecFile.mockClear();
+      mockSetRgb.mockClear();
       await mgr.reset();
-      expect(mockExecFile).toHaveBeenCalledOnce();
-      expect(mockExecFile).toHaveBeenCalledWith(RGB_SET, ['off'], expect.any(Function));
+      expect(mockSetRgb).toHaveBeenCalledOnce();
+      expect(mockSetRgb).toHaveBeenCalledWith('off');
     });
 
     it('sets activeCount to 0 so a subsequent endProcessing logs error', async () => {
-      const mgr = new RgbStateManager(RGB_SET);
+      const mgr = new RgbStateManager();
       mgr.startProcessing();
       await mgr.reset();
-      mockExecFile.mockClear();
+      mockSetRgb.mockClear();
       const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
       mgr.endProcessing(); // count is 0 after reset
-      expect(mockExecFile).not.toHaveBeenCalled();
+      expect(mockSetRgb).not.toHaveBeenCalled();
       expect(spy).toHaveBeenCalled();
       spy.mockRestore();
     });
 
-    it('resolves even if rgb-set fails', async () => {
-      const mgr = new RgbStateManager(RGB_SET);
-      mockExecFile.mockImplementation(
-        (_cmd: string, _args: string[], cb: (err: Error | null) => void) =>
-          cb(new Error('openrgb not found'))
-      );
+    it('resolves even if setRgb fails', async () => {
+      const mgr = new RgbStateManager();
+      mockSetRgb.mockRejectedValue(new Error('connection refused'));
       const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
       await expect(mgr.reset()).resolves.toBeUndefined();
       expect(spy).toHaveBeenCalled();

@@ -1,18 +1,13 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-
-const execFileAsync = promisify(execFile);
+import { setRgb } from './rgb-client.js';
 
 export class RgbStateManager {
   private activeCount = 0;
 
-  constructor(private readonly rgbSetPath: string) {}
-
   startProcessing(): void {
     this.activeCount++;
     if (this.activeCount === 1) {
-      execFile(this.rgbSetPath, ['processing'], (err) => {
-        if (err) console.error('RgbStateManager: execFile error:', err);
+      setRgb('processing').catch((err) => {
+        console.error('RgbStateManager: setRgb error:', err);
       });
     }
   }
@@ -24,8 +19,8 @@ export class RgbStateManager {
     }
     this.activeCount--;
     if (this.activeCount === 0) {
-      execFile(this.rgbSetPath, ['off'], (err) => {
-        if (err) console.error('RgbStateManager: execFile error:', err);
+      setRgb('off').catch((err) => {
+        console.error('RgbStateManager: setRgb error:', err);
       });
     }
   }
@@ -33,9 +28,9 @@ export class RgbStateManager {
   async reset(): Promise<void> {
     this.activeCount = 0;
     try {
-      await execFileAsync(this.rgbSetPath, ['off']);
+      await setRgb('off');
     } catch (err) {
-      console.error('RgbStateManager: execFile error:', err);
+      console.error('RgbStateManager: setRgb error:', err);
     }
   }
 }

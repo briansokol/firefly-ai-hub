@@ -1,5 +1,4 @@
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import { RgbStateManager } from './rgb.js';
 import { Client as TemporalClient, Connection } from '@temporalio/client';
@@ -22,8 +21,7 @@ async function main() {
   const connection = await Connection.connect({ address: temporalAddress });
   const temporalClient = new TemporalClient({ connection });
 
-  const RGB_SET = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../rgb/rgb-set');
-  const rgbManager = new RgbStateManager(RGB_SET);
+  const rgbManager = new RgbStateManager();
   await rgbManager.reset();
 
   // Discord bot must be ready before worker starts — guild cache must be warm for activities

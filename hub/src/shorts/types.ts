@@ -26,6 +26,17 @@ export interface Candidate {
   category?: ClipCategory;
 }
 
+export type ActionPosition = 'left' | 'center-left' | 'center' | 'center-right' | 'right';
+
+export interface ConfirmedCandidate extends Candidate {
+  hostedScore?: number;
+  hostedReasoning?: string;
+  confirmed: boolean;
+  actionPosition?: ActionPosition;
+  facecamPosition?: string | null;
+  cropOffset?: number;
+}
+
 export interface FeatureVector {
   speechRate: number;      // words per second
   volumeDelta: number;     // current LUFS minus 10s rolling average
@@ -52,6 +63,26 @@ export interface ProsodyBucket {
   pitch_variance: number;  // variance of F0 within bucket
   pitch_rise: number;      // max pitch minus speaker baseline
   energy: number;          // RMS energy relative to file mean
+}
+
+export interface ClipResult {
+  candidateIndex: number;
+  timestamp: number;
+  startTime: number;
+  endTime: number;
+  outputPath: string;
+  subtitlePath: string;
+  duration: number;
+}
+
+export interface ShortsCheckpoint {
+  version: 1;
+  createdAt: string;
+  videoMeta: VideoMeta;
+  transcript: TranscriptWord[];
+  confirmedCandidates: ConfirmedCandidate[];
+  titles: string[];
+  shortsConfig: import('../types.js').ShortsConfig;
 }
 
 /** Summary of audio features for a time window, for injection into LLM prompts. */

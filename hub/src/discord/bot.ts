@@ -1,16 +1,12 @@
-import { execFile } from 'node:child_process';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { Client, GatewayIntentBits, Partials } from 'discord.js';
 import { Client as TemporalClient } from '@temporalio/client';
 import type { Config } from '../types.js';
 import { getDiscordToken } from '../config.js';
-import { isAllowed, stripMention, resolveRoute, parseRgbCommand, parseShortsCommand } from './router.js';
+import { isAllowed, stripMention, resolveRoute, parseRgbCommand, parseShortsCommand, parseShortsEditCommand } from './router.js';
 import type { ChatWorkflow } from '../temporal/workflow-types.js';
 import { RgbStateManager } from '../rgb.js';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const RGB_SET = path.resolve(__dirname, '../../../rgb/rgb-set');
+import { setRgb } from '../rgb-client.js';
 
 const SYSTEM_PROMPT = 'You are a helpful AI assistant running on a private home server.';
 const MAX_MSG_LENGTH = 2000;
@@ -49,13 +45,10 @@ export function createDiscordBot(config: Config, temporalClient: TemporalClient,
 
     const rgbPreset = parseRgbCommand(rawContent);
     if (rgbPreset !== null) {
-      execFile(RGB_SET, [rgbPreset], (err) => {
-        if (err) {
-          message.reply(`RGB error: ${err.message}`).catch(() => {});
-        } else {
-          message.reply(`RGB set to **${rgbPreset}**`).catch(() => {});
-        }
-      });
+      setRgb(rgbPreset).then(
+        () => { message.reply(`RGB set to **${rgbPreset}**`).catch(() => {}); },
+        (err) => { message.reply(`RGB error: ${err.message}`).catch(() => {}); },
+      );
       return;
     }
 
@@ -71,6 +64,25 @@ export function createDiscordBot(config: Config, temporalClient: TemporalClient,
         args: [shortsCmd.source, config.shorts],
       });
       await message.reply("⏳ Processing started — I'll post results when done.");
+      return;
+    }
+
+    const shortsEditCmd = parseShortsEditCommand(rawContent);
+    if (shortsEditCmd !== null) {
+      if (!config.shorts) {
+        await message.reply('⚠️ Shorts processing is not configured.');
+        return;
+      }
+      // Resolve workspace name to full path (accept either a name or absolute path)
+      const workspacePath = shortsEditCmd.workspaceName.startsWith('/')
+        ? shortsEditCmd.workspaceName
+        : path.join(config.shorts.workspace_dir, shortsEditCmd.workspaceName);
+      await temporalClient.workflow.start('shortsEditWorkflow', {
+        workflowId: `shorts-edit-${message.id}`,
+        taskQueue: 'firefly-ai-hub',
+        args: [workspacePath],
+      });
+      await message.reply(`⏳ Re-processing clips from checkpoint in \`${shortsEditCmd.workspaceName}\`...`);
       return;
     }
 

@@ -55,4 +55,4 @@ export async function rgbWorkflow(preset: import('./workflow-types.js').RgbPrese
   await setRgbPreset(preset);
 }
 
-export { shortsAnalysisWorkflow } from '../shorts/workflow.js';
+export { shortsAnalysisWorkflow, shortsEditWorkflow } from '../shorts/workflow.js';

@@ -18,6 +18,12 @@ services:
       - /opt/ai-hub/config.toml:/app/config.toml:ro
       - hub-state:/var/lib/ai-hub
       - /var/run/docker.sock:/var/run/docker.sock
+      - /var/run/ai-hub/rgb.sock:/var/run/ai-hub/rgb.sock
+      - type: bind
+        source: /mnt/nas/shorts
+        target: /mnt/nas/shorts
+        bind:
+          propagation: rslave
     extra_hosts:
       - "host.docker.internal:host-gateway"
     deploy:
