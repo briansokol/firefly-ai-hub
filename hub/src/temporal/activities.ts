@@ -7,8 +7,11 @@ import type { Config } from '../types.js';
 import type { StateStore } from '../email/state.js';
 import type { FetchedEmail } from '../email/imap.js';
 import { chat } from '../ollama.js';
-import { fetchNewEmails } from '../email/imap.js';
+import { fetchNewEmails, moveEmails } from '../email/imap.js';
 import { buildTriagePrompt, parseTriageResponse } from '../email/triage.js';
+import { buildCategorizePrompt, parseCategorizeResponse } from '../email/categorize.js';
+import type { CategorizeResult } from '../email/categorize.js';
+import type { CategorizationEntry } from '../email/state.js';
 import { getEmailPassword } from '../config.js';
 import type { RgbPreset } from './workflow-types.js';
 import { setRgb } from '../rgb-client.js';
@@ -70,11 +73,12 @@ export function createActivities(deps: ActivityDeps) {
     async fetchEmails(
       accountName: string,
       sinceUid: number,
+      limit?: number,
     ): Promise<{ emails: FetchedEmail[]; maxUid: number }> {
       const account = config.email.accounts.find((a) => a.name === accountName);
       if (!account) throw new Error(`Unknown email account: ${accountName}`);
       const password = getEmailPassword(account);
-      const emails = await fetchNewEmails(account, password, sinceUid);
+      const emails = await fetchNewEmails(account, password, sinceUid, limit);
       const maxUid = emails.length > 0 ? Math.max(...emails.map((e) => e.uid)) : sinceUid;
       return { emails, maxUid };
     },
@@ -130,6 +134,67 @@ export function createActivities(deps: ActivityDeps) {
 
     async setRgbPreset(preset: RgbPreset): Promise<void> {
       await setRgb(preset);
+    },
+
+    // ── Email Categorization activities ─────────────────────────────────────
+
+    async categorizeWithOllama(email: FetchedEmail): Promise<CategorizeResult> {
+      const catConfig = config.email.categorization;
+      const model = catConfig?.model || config.models.default;
+      const categories = catConfig?.categories ?? ['Newsletters', 'Bills', 'VIP', 'Other'];
+      const defaultCategory = catConfig?.default_category ?? 'Other';
+
+      const { system, user } = buildCategorizePrompt(email);
+      const raw = await chat(ollamaClient, model, system, user);
+      return parseCategorizeResponse(raw, categories, defaultCategory);
+    },
+
+    async moveEmailsToFolders(
+      accountName: string,
+      sourceFolder: string,
+      moves: Array<{ uid: number; destFolder: string }>,
+    ): Promise<Array<{ uid: number; success: boolean }>> {
+      const account = config.email.accounts.find((a) => a.name === accountName);
+      if (!account) throw new Error(`Unknown email account: ${accountName}`);
+      const password = getEmailPassword(account);
+      return moveEmails(account, password, sourceFolder, moves);
+    },
+
+    async recordCategorizationResults(
+      accountName: string,
+      results: Array<{ uid: number; subject: string; from: string; category: string; reason: string; needsResponse: boolean }>,
+    ): Promise<void> {
+      for (const r of results) {
+        stateStore.logCategorization({
+          account: accountName,
+          uid: r.uid,
+          subject: r.subject,
+          sender: r.from,
+          category: r.category,
+          reason: r.reason,
+          needsResponse: r.needsResponse,
+        });
+      }
+
+      // Post to #email only for emails that need a response
+      const needsResponse = results.filter((r) => r.needsResponse);
+      if (needsResponse.length > 0) {
+        const emailChannel = getTextChannel('email');
+        if (emailChannel) {
+          const lines = needsResponse.map((r) =>
+            `• **${r.subject}** from ${r.from} → ${r.category}\n  _${r.reason}_`
+          ).join('\n');
+          await emailChannel.send(`📬 **${accountName}** — ${needsResponse.length} email(s) may need a response:\n${lines}`);
+        }
+      }
+    },
+
+    async getCategorizationSummary(accountName: string): Promise<string> {
+      const counts = stateStore.getTodaySummary(accountName);
+      if (counts.length === 0) return '';
+      const total = counts.reduce((sum, c) => sum + c.count, 0);
+      const breakdown = counts.map((c) => `${c.count} ${c.category}`).join(', ');
+      return `Categorized ${total} emails: ${breakdown}`;
     },
 
     // ── Shorts Phase 1 activities ──────────────────────────────────────────

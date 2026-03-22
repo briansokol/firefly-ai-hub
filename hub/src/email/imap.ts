@@ -14,6 +14,7 @@ export async function fetchNewEmails(
   account: EmailAccount,
   password: string,
   lastUid: number,
+  limit?: number,
 ): Promise<FetchedEmail[]> {
   const client = new ImapFlow({
     host: account.host,
@@ -75,5 +76,67 @@ export async function fetchNewEmails(
   }
 
   results.sort((a, b) => a.uid - b.uid);
+  if (limit && limit > 0) {
+    return results.slice(0, limit);
+  }
+  return results;
+}
+
+export interface MoveResult {
+  uid: number;
+  success: boolean;
+}
+
+export async function moveEmails(
+  account: EmailAccount,
+  password: string,
+  sourceFolder: string,
+  moves: Array<{ uid: number; destFolder: string }>,
+): Promise<MoveResult[]> {
+  if (moves.length === 0) return [];
+
+  const client = new ImapFlow({
+    host: account.host,
+    port: account.port,
+    secure: account.ssl,
+    auth: { user: account.username, pass: password },
+    logger: false,
+  });
+
+  await client.connect();
+  const results: MoveResult[] = [];
+
+  try {
+    const lock = await client.getMailboxLock(sourceFolder, { readOnly: false });
+    try {
+      // Group UIDs by destination folder for efficient batch moves
+      const groups = new Map<string, number[]>();
+      for (const move of moves) {
+        const existing = groups.get(move.destFolder) ?? [];
+        existing.push(move.uid);
+        groups.set(move.destFolder, existing);
+      }
+
+      for (const [destFolder, uids] of groups) {
+        const uidSet = uids.join(',');
+        try {
+          await client.messageMove(uidSet, destFolder, { uid: true });
+          for (const uid of uids) {
+            results.push({ uid, success: true });
+          }
+        } catch (err) {
+          console.error(`[moveEmails] Failed to move UIDs ${uidSet} to ${destFolder}:`, err);
+          for (const uid of uids) {
+            results.push({ uid, success: false });
+          }
+        }
+      }
+    } finally {
+      lock.release();
+    }
+  } finally {
+    await client.logout();
+  }
+
   return results;
 }

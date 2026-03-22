@@ -22,3 +22,11 @@ username     = "you@gmail.com"
 password_env = "GMAIL_APP_PASSWORD"
 ssl          = true
 folders      = ["INBOX"]
+
+[email.categorization]
+enabled          = true
+source_folder    = "Screening"
+categories       = ["Newsletters", "Bills", "VIP", "Other"]
+default_category = "Other"
+batch_size       = 10
+# model          = ""  # empty = use models.default

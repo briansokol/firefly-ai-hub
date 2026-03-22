@@ -35,6 +35,12 @@ export function parseShortsCommand(content: string): { source: string } | null {
   return { source };
 }
 
+export function parseCategorizeCommand(content: string): { accountName: string } | null {
+  const match = content.match(/^!categorize(?:\s+(\S+))?$/i);
+  if (!match) return null;
+  return { accountName: match[1] ?? 'fastmail' };
+}
+
 export function parseShortsEditCommand(content: string): { workspaceName: string } | null {
   const match = content.match(/^!shorts-edit\s+(.+)$/i);
   if (!match) return null;

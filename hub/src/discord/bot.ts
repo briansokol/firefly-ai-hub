@@ -3,7 +3,7 @@ import { Client, GatewayIntentBits, Partials } from 'discord.js';
 import { Client as TemporalClient } from '@temporalio/client';
 import type { Config } from '../types.js';
 import { getDiscordToken } from '../config.js';
-import { isAllowed, stripMention, resolveRoute, parseRgbCommand, parseShortsCommand, parseShortsEditCommand } from './router.js';
+import { isAllowed, stripMention, resolveRoute, parseRgbCommand, parseShortsCommand, parseShortsEditCommand, parseCategorizeCommand } from './router.js';
 import type { ChatWorkflow } from '../temporal/workflow-types.js';
 import { RgbStateManager } from '../rgb.js';
 import { setRgb } from '../rgb-client.js';
@@ -64,6 +64,21 @@ export function createDiscordBot(config: Config, temporalClient: TemporalClient,
         args: [shortsCmd.source, config.shorts],
       });
       await message.reply("⏳ Processing started — I'll post results when done.");
+      return;
+    }
+
+    const categorizeCmd = parseCategorizeCommand(rawContent);
+    if (categorizeCmd !== null) {
+      if (!config.email.categorization?.enabled) {
+        await message.reply('⚠️ Email categorization is not configured.');
+        return;
+      }
+      await temporalClient.workflow.start('emailCategorizationWorkflow', {
+        workflowId: `email-categorize-${message.id}`,
+        taskQueue: 'firefly-ai-hub',
+        args: [categorizeCmd.accountName],
+      });
+      await message.reply(`📬 Categorizing emails for **${categorizeCmd.accountName}**...`);
       return;
     }
 

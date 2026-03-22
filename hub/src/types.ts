@@ -27,8 +27,18 @@ export interface EmailAccount {
   folders: string[];
 }
 
+export interface EmailCategorizationConfig {
+  enabled: boolean;
+  source_folder: string;
+  categories: string[];
+  default_category: string;
+  batch_size: number;
+  model?: string;
+}
+
 export interface EmailConfig {
   accounts: EmailAccount[];
+  categorization?: EmailCategorizationConfig;
 }
 
 export interface HostedScoringConfig {

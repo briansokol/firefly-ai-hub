@@ -51,6 +51,19 @@ export async function registerSchedules(config: Config, client: Client): Promise
     );
   }
 
+  // Email categorization — every 5 minutes, batch of 10
+  if (config.email.categorization?.enabled) {
+    for (const account of config.email.accounts) {
+      await ensureSchedule(
+        client,
+        `email-categorize-${account.name}`,
+        { cronExpression: '*/5 * * * *', timezone: config.schedule.timezone },
+        'emailCategorizationWorkflow',
+        [account.name],
+      );
+    }
+  }
+
   await ensureSchedule(
     client,
     'daily-summary',
