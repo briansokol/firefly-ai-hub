@@ -82,6 +82,67 @@ export async function fetchNewEmails(
   return results;
 }
 
+/**
+ * Fetch the oldest N messages from a specific folder by sequence number.
+ * Designed for draining a backlog — since processed messages get moved out,
+ * the oldest remaining are always unprocessed.
+ */
+export async function fetchOldestFromFolder(
+  account: EmailAccount,
+  password: string,
+  folder: string,
+  limit: number,
+): Promise<FetchedEmail[]> {
+  const client = new ImapFlow({
+    host: account.host,
+    port: account.port,
+    secure: account.ssl,
+    auth: { user: account.username, pass: password },
+    logger: false,
+  });
+
+  await client.connect();
+  const results: FetchedEmail[] = [];
+
+  try {
+    const lock = await client.getMailboxLock(folder, { readOnly: true });
+    try {
+      const total = client.mailbox ? client.mailbox.exists : 0;
+      if (total === 0) return [];
+
+      const fetchCount = Math.min(limit, total);
+      // Sequence 1:N fetches the oldest N messages
+      for await (const msg of client.fetch(`1:${fetchCount}`, {
+        uid: true,
+        envelope: true,
+        bodyParts: [{ key: 'TEXT', maxLength: 5000 }],
+      })) {
+        const env = msg.envelope;
+        const addr = env?.from?.[0];
+        const from = addr
+          ? addr.name
+            ? `${addr.name} <${addr.address}>`
+            : (addr.address ?? 'unknown')
+          : 'unknown';
+
+        results.push({
+          uid: msg.uid,
+          subject: env?.subject ?? '(no subject)',
+          from,
+          date: env?.date ?? new Date(),
+          text: msg.bodyParts?.get('TEXT')?.toString('utf8') ?? '',
+        });
+      }
+    } finally {
+      lock.release();
+    }
+  } finally {
+    await client.logout();
+  }
+
+  return results;
+}
+
 export interface MoveResult {
   uid: number;
   success: boolean;

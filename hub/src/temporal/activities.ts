@@ -7,7 +7,7 @@ import type { Config } from '../types.js';
 import type { StateStore } from '../email/state.js';
 import type { FetchedEmail } from '../email/imap.js';
 import { chat } from '../ollama.js';
-import { fetchNewEmails, moveEmails } from '../email/imap.js';
+import { fetchNewEmails, fetchOldestFromFolder, moveEmails } from '../email/imap.js';
 import { buildTriagePrompt, parseTriageResponse } from '../email/triage.js';
 import { buildCategorizePrompt, parseCategorizeResponse } from '../email/categorize.js';
 import type { CategorizeResult } from '../email/categorize.js';
@@ -137,6 +137,17 @@ export function createActivities(deps: ActivityDeps) {
     },
 
     // ── Email Categorization activities ─────────────────────────────────────
+
+    async fetchOldestEmails(
+      accountName: string,
+      folder: string,
+      limit: number,
+    ): Promise<FetchedEmail[]> {
+      const account = config.email.accounts.find((a) => a.name === accountName);
+      if (!account) throw new Error(`Unknown email account: ${accountName}`);
+      const password = getEmailPassword(account);
+      return fetchOldestFromFolder(account, password, folder, limit);
+    },
 
     async categorizeWithOllama(email: FetchedEmail): Promise<CategorizeResult> {
       const catConfig = config.email.categorization;

@@ -11,6 +11,7 @@ const {
   generateDailySummary,
   postDailySummary,
   setRgbPreset,
+  fetchOldestEmails,
   categorizeWithOllama,
   moveEmailsToFolders,
   recordCategorizationResults,
@@ -51,13 +52,14 @@ export async function emailTriageWorkflow(accountName: string): Promise<void> {
 }
 
 export async function emailCategorizationWorkflow(accountName: string): Promise<void> {
-  const stateKey = `${accountName}:categorize`;
-  const sinceUid = await getLastUid(stateKey);
+  const sourceFolder = 'Screening';
   const batchSize = 10;
-  const { emails } = await fetchEmails(accountName, sinceUid, batchSize);
+
+  // Fetch oldest messages in the folder — since we move processed emails out,
+  // the oldest remaining are always unprocessed. No UID tracking needed.
+  const emails = await fetchOldestEmails(accountName, sourceFolder, batchSize);
   if (emails.length === 0) return;
 
-  const sourceFolder = 'Screening';
   const categorized: Array<{
     uid: number; subject: string; from: string;
     category: string; reason: string; needsResponse: boolean;
@@ -82,10 +84,6 @@ export async function emailCategorizationWorkflow(accountName: string): Promise<
 
   // Record results and notify Discord if any need responses
   await recordCategorizationResults(accountName, categorized);
-
-  // Update UID to the highest processed
-  const maxUid = Math.max(...emails.map((e) => e.uid));
-  await updateLastUid(stateKey, maxUid);
 }
 
 export async function dailySummaryWorkflow(): Promise<void> {
