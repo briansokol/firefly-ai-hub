@@ -13,6 +13,9 @@ export function loadConfig(): Config {
   const raw = fs.readFileSync(configPath, 'utf8');
   const parsed = parse(raw) as unknown as Config;
   requireEnv(parsed.discord.token_env);
+  for (const account of parsed.email?.accounts ?? []) {
+    requireEnv(account.password_env);
+  }
   if (parsed.shorts?.hosted_scoring?.enabled) {
     requireEnv(parsed.shorts.hosted_scoring.api_key_env);
   }
