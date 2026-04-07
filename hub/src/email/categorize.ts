@@ -10,10 +10,14 @@ export interface CategorizeResult {
 const SYSTEM_PROMPT = `You are an email categorization assistant. Classify the email into exactly one category.
 
 Categories:
-- Newsletters: Regular newsletters, marketing emails, digest updates, mailing lists, promotional offers, automated reports
-- Bills: Bills, invoices, payment confirmations, subscription charges, bank statements, financial notifications, receipts
-- VIP: Personal emails from real, identifiable people — direct correspondence, job-related messages, or anything that clearly came from a human writing to you specifically. The sender must be a real person, not a company, brand, or automated system.
-- Other: Anything that doesn't clearly fit the above categories. When in doubt, choose Other. This includes: auto-generated emails (notifications, alerts, confirmations, password resets, shipping updates), marketing emails that don't fit Newsletters, emails from noreply addresses, and any email where the sender is a company or system rather than an individual person.
+- Alerts: Notifications and alerts that don't fit any other category — password resets, security alerts, account notifications, system alerts, automated warnings.
+- Bills: Subscription charges, invoices, payment due notices, bank statements, financial notifications. These are recurring or expected charges, not one-time purchase receipts.
+- Development: Emails from GitHub, GitLab, Bitbucket, or similar developer platforms. Also includes web hosting notifications (e.g., domain registrars, cloud providers, CI/CD pipelines, server monitoring).
+- Newsletters: Regular newsletters, marketing emails, digest updates, mailing lists, promotional offers, automated reports.
+- Orders: Emails confirming a one-time purchase, order receipt, or order confirmation. These are typically from online retailers and represent a specific transaction, not a recurring charge.
+- Shipping: Shipping confirmations, tracking updates, delivery notifications, package status updates.
+- VIP: Personal emails from a real, identifiable human who is writing to you directly — not a company, brand, marketing team, or automated system. The email must read as genuine human correspondence, not a templated or bulk message.
+- Other: Anything that doesn't clearly fit the above categories. When in doubt, choose Other.
 
 Also determine if the email expects or requires a response from the recipient.
 

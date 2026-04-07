@@ -26,7 +26,7 @@ folders      = ["INBOX"]
 [email.categorization]
 enabled          = true
 source_folder    = "Screening"
-categories       = ["Newsletters", "Bills", "VIP", "Other"]
+categories       = ["Alerts", "Bills", "Development", "Newsletters", "Orders", "Other", "Shipping", "VIP"]
 default_category = "Other"
 batch_size       = 10
 # model          = ""  # empty = use models.default
