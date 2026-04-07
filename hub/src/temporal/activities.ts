@@ -152,7 +152,7 @@ export function createActivities(deps: ActivityDeps) {
     async categorizeWithOllama(email: FetchedEmail): Promise<CategorizeResult> {
       const catConfig = config.email.categorization;
       const model = catConfig?.model || config.models.default;
-      const categories = catConfig?.categories ?? ['Newsletters', 'Bills', 'VIP', 'Other'];
+      const categories = catConfig?.categories ?? ['Alerts', 'Bills', 'Development', 'Newsletters', 'Orders', 'Other', 'Shipping', 'VIP'];
       const defaultCategory = catConfig?.default_category ?? 'Other';
 
       const { system, user } = buildCategorizePrompt(email);
@@ -553,8 +553,14 @@ export function createActivities(deps: ActivityDeps) {
       const confirmed = candidates.filter(c => c.confirmed);
 
       const titleLines = titles.map((t, i) => `${i + 1}. ${t}`).join('\n');
-      const candidateLines = confirmed
-        .map((c, i) => {
+
+      const filteredNote = confirmed.length < candidates.length
+        ? `_${candidates.length - confirmed.length} candidate(s) filtered out by hosted AI_`
+        : '';
+
+      const sections: string[] = [
+        `✅ Shorts ready for: **${videoMeta.title}**\n\n**Suggested Episode Titles:**\n${titleLines}\n\n**Processed Clips (${clipResults.length}):**`,
+        ...confirmed.map((c, i) => {
           const cat = c.category ? ` [${c.category}]` : '';
           const scoreDisplay = c.hostedScore != null
             ? `(local: ${c.score.toFixed(1)}, hosted: ${c.hostedScore.toFixed(1)})`
@@ -566,19 +572,14 @@ export function createActivities(deps: ActivityDeps) {
             : '';
           const reasoning = c.hostedReasoning ? `\n   > ${c.hostedReasoning}` : '';
           return `${i + 1}. 🎬 \`${formatTimestamp(c.timestamp)}\` — "${c.quote}" ${scoreDisplay}${cat}${cropInfo}${clipInfo}${reasoning}`;
-        })
-        .join('\n');
+        }),
+        ...(filteredNote ? [filteredNote] : []),
+      ];
 
-      const filteredNote = confirmed.length < candidates.length
-        ? `\n_${candidates.length - confirmed.length} candidate(s) filtered out by hosted AI_`
-        : '';
-
-      const msg =
-        `✅ Shorts ready for: **${videoMeta.title}**\n\n` +
-        `**Suggested Episode Titles:**\n${titleLines}\n\n` +
-        `**Processed Clips (${clipResults.length}):**\n${candidateLines}${filteredNote}`;
-
-      await channel.send(msg);
+      const messages = splitDiscordMessages(sections);
+      for (const msg of messages) {
+        await channel.send(msg);
+      }
 
       // Upload clips to Discord (if under 25MB) or post NAS path
       const MAX_DISCORD_SIZE = 25 * 1024 * 1024;
@@ -602,6 +603,22 @@ export function createActivities(deps: ActivityDeps) {
       await channel.send(`💾 Workspace: \`${workspaceName}\`\nRe-edit with: \`!shorts-edit ${workspaceName}\``);
     },
   };
+}
+
+function splitDiscordMessages(sections: string[], limit = 2000): string[] {
+  const messages: string[] = [];
+  let current = '';
+  for (const section of sections) {
+    const addition = current ? '\n' + section : section;
+    if (current && (current + addition).length > limit) {
+      messages.push(current);
+      current = section.length > limit ? section.slice(0, limit - 3) + '...' : section;
+    } else {
+      current = current ? current + addition : section;
+    }
+  }
+  if (current) messages.push(current);
+  return messages;
 }
 
 function formatTimestamp(seconds: number): string {

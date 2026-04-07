@@ -12,8 +12,8 @@ const SYSTEM_PROMPT = `You are an email categorization assistant. Classify the e
 Categories:
 - Newsletters: Regular newsletters, marketing emails, digest updates, mailing lists, promotional offers, automated reports
 - Bills: Bills, invoices, payment confirmations, subscription charges, bank statements, financial notifications, receipts
-- VIP: Personal emails from real people (not automated), job-related correspondence, account security alerts, appointment confirmations, direct messages that expect a reply
-- Other: Anything that doesn't clearly fit the above categories. When in doubt, choose Other.
+- VIP: Personal emails from real, identifiable people — direct correspondence, job-related messages, or anything that clearly came from a human writing to you specifically. The sender must be a real person, not a company, brand, or automated system.
+- Other: Anything that doesn't clearly fit the above categories. When in doubt, choose Other. This includes: auto-generated emails (notifications, alerts, confirmations, password resets, shipping updates), marketing emails that don't fit Newsletters, emails from noreply addresses, and any email where the sender is a company or system rather than an individual person.
 
 Also determine if the email expects or requires a response from the recipient.
 
