@@ -3,6 +3,9 @@ import type { Activities } from './activities.js';
 
 const {
   callOllama,
+  chatWithConversation,
+  listMemories,
+  forgetMemory,
   getLastUid,
   fetchEmails,
   triageWithOllama,
@@ -28,9 +31,18 @@ const {
 export async function chatWorkflow(
   model: string,
   systemPrompt: string,
+  conversationId: string,
   userMessage: string,
 ): Promise<string> {
-  return callOllama(model, systemPrompt, userMessage);
+  return chatWithConversation(model, systemPrompt, conversationId, userMessage);
+}
+
+export async function listMemoriesWorkflow(userId: string): Promise<string> {
+  return listMemories(userId);
+}
+
+export async function forgetMemoryWorkflow(userId: string, keyword: string): Promise<string> {
+  return forgetMemory(userId, keyword);
 }
 
 export async function emailTriageWorkflow(accountName: string): Promise<void> {

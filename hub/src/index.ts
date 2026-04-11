@@ -6,6 +6,8 @@ import { loadConfig } from './config.js';
 import { createOllamaClient } from './ollama.js';
 import { createDiscordBot, startDiscordBot } from './discord/bot.js';
 import { createStateStore } from './email/state.js';
+import { createConversationStore } from './discord/conversation.js';
+import { createMemoryStore } from './memory/store.js';
 import { createWorker } from './temporal/worker.js';
 import { registerSchedules } from './temporal/schedules.js';
 
@@ -14,7 +16,10 @@ async function main() {
   const ollamaClient = createOllamaClient(config);
 
   const stateDir = process.env.STATE_DIR ?? path.join(os.homedir(), '.local/share/firefly-ai-hub');
-  const stateStore = createStateStore(path.join(stateDir, 'state.db'));
+  const dbPath = path.join(stateDir, 'state.db');
+  const stateStore = createStateStore(dbPath);
+  const conversationStore = createConversationStore(dbPath);
+  const memoryStore = createMemoryStore(dbPath);
 
   // Temporal client — shared by Discord bot (starts chatWorkflow) and schedule registration
   const temporalAddress = process.env.TEMPORAL_ADDRESS ?? 'localhost:7233';
@@ -25,11 +30,11 @@ async function main() {
   await rgbManager.reset();
 
   // Discord bot must be ready before worker starts — guild cache must be warm for activities
-  const discordClient = createDiscordBot(config, temporalClient, rgbManager);
+  const discordClient = createDiscordBot(config, temporalClient, rgbManager, conversationStore);
   await startDiscordBot(discordClient, config);
 
   // Start Temporal worker (runs indefinitely in background)
-  const worker = await createWorker({ ollamaClient, discordClient, config, stateStore });
+  const worker = await createWorker({ ollamaClient, discordClient, config, stateStore, conversationStore, memoryStore });
   void worker.run().catch((err) => {
     console.error('Temporal worker error:', err);
     process.exit(1);
@@ -44,6 +49,8 @@ async function main() {
     void rgbManager.reset();
     void worker.shutdown();
     stateStore.close();
+    conversationStore.close();
+    memoryStore.close();
     discordClient.destroy();
     void connection.close();
     process.exit(0);

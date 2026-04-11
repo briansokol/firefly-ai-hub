@@ -4,9 +4,9 @@ allowed_user_ids = ["YOUR_DISCORD_USER_ID"]
 guild_id         = "YOUR_GUILD_ID"
 
 [models]
-default         = "qwen3:30b-a3b"
+default         = "gemma4:26b"
 coding          = "qwen2.5-coder:32b"
-complex         = "glm-4.7-flash"
+complex         = "gemma4:26b"
 ollama_base_url = "http://host.docker.internal:11434/v1"
 
 [schedule]
@@ -30,3 +30,16 @@ categories       = ["Alerts", "Bills", "Development", "Newsletters", "Orders", "
 default_category = "Other"
 batch_size       = 10
 # model          = ""  # empty = use models.default
+
+# [tools.web_search]
+# provider    = "brave"
+# api_key_env = "BRAVE_SEARCH_API_KEY"
+
+# [tools.weather]
+# default_location = "New York"
+
+# [tools.fetch_url]
+# max_body_bytes = 2097152   # 2 MB
+# max_text_chars = 15000
+# timeout_ms     = 15000
+# max_redirects  = 5

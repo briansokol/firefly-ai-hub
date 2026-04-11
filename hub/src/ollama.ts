@@ -1,4 +1,9 @@
 import OpenAI from 'openai';
+import type {
+  ChatCompletionMessageParam,
+  ChatCompletionMessage,
+  ChatCompletionTool,
+} from 'openai/resources/chat/completions.js';
 import type { Config } from './types.js';
 
 export function createOllamaClient(config: Config): OpenAI {
@@ -8,6 +13,7 @@ export function createOllamaClient(config: Config): OpenAI {
   });
 }
 
+/** Single-turn chat (used by email triage, categorization, etc.) */
 export async function chat(
   client: OpenAI,
   model: string,
@@ -22,4 +28,25 @@ export async function chat(
     ],
   });
   return response.choices[0]?.message?.content ?? '(no response)';
+}
+
+/** Multi-turn chat with full message history and optional tool definitions. */
+export async function chatWithHistory(
+  client: OpenAI,
+  model: string,
+  messages: ChatCompletionMessageParam[],
+  tools?: ChatCompletionTool[],
+): Promise<ChatCompletionMessage> {
+  const response = await client.chat.completions.create({
+    model,
+    messages,
+    ...(tools && tools.length > 0 ? { tools } : {}),
+  });
+  return (
+    response.choices[0]?.message ?? {
+      role: 'assistant' as const,
+      content: '(no response)',
+      refusal: null,
+    }
+  );
 }

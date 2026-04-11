@@ -5,6 +5,7 @@
 export type ChatWorkflow = (
   model: string,
   systemPrompt: string,
+  conversationId: string,
   userMessage: string,
 ) => Promise<string>;
 

@@ -80,10 +80,33 @@ export interface ShortsConfig {
   subtitles?: SubtitleConfig;
 }
 
+export interface WebSearchConfig {
+  provider: 'brave';
+  api_key_env: string;
+}
+
+export interface WeatherConfig {
+  default_location?: string;
+}
+
+export interface FetchUrlConfig {
+  max_body_bytes?: number;   // default 2MB
+  max_text_chars?: number;   // default 15000
+  timeout_ms?: number;       // default 15000
+  max_redirects?: number;    // default 5
+}
+
+export interface ToolsConfig {
+  web_search?: WebSearchConfig;
+  weather?: WeatherConfig;
+  fetch_url?: FetchUrlConfig;
+}
+
 export interface Config {
   discord: DiscordConfig;
   models: ModelsConfig;
   schedule: ScheduleConfig;
   email: EmailConfig;
   shorts?: ShortsConfig;
+  tools?: ToolsConfig;
 }

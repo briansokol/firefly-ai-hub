@@ -6,7 +6,10 @@ import type { Client as DiscordClient } from 'discord.js';
 import type { Config } from '../types.js';
 import type { StateStore } from '../email/state.js';
 import type { FetchedEmail } from '../email/imap.js';
-import { chat } from '../ollama.js';
+import { chat, chatWithHistory } from '../ollama.js';
+import type { ConversationStore } from '../discord/conversation.js';
+import { getToolRegistry, getToolSpecs } from '../tools/registry.js';
+import type { MemoryStore } from '../memory/store.js';
 import { fetchNewEmails, fetchOldestFromFolder, moveEmails } from '../email/imap.js';
 import { buildTriagePrompt, parseTriageResponse } from '../email/triage.js';
 import { buildCategorizePrompt, parseCategorizeResponse } from '../email/categorize.js';
@@ -41,15 +44,46 @@ function slugifyTitle(title: string): string {
     || 'untitled';
 }
 
+async function extractMemoriesFromExchange(
+  ollamaClient: OpenAI,
+  memoryStore: MemoryStore,
+  model: string,
+  userId: string,
+  userMessage: string,
+  assistantReply: string,
+): Promise<void> {
+  const extractPrompt =
+    'Extract any new facts, preferences, or important personal details about the user from this conversation exchange. ' +
+    'Return a JSON array of objects with "category" (one of: preference, fact, project, relationship) and "content" (the fact). ' +
+    'Return an empty array [] if nothing notable was shared. Only extract clear, specific facts — not vague statements.';
+
+  const raw = await chat(ollamaClient, model, extractPrompt, `User: ${userMessage}\nAssistant: ${assistantReply}`);
+
+  // Strip think blocks before parsing
+  const cleaned = raw.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+
+  // Find JSON array in the response
+  const match = cleaned.match(/\[[\s\S]*\]/);
+  if (!match) return;
+  const extracted = JSON.parse(match[0]) as Array<{ category: string; content: string }>;
+  for (const item of extracted) {
+    if (item.content && item.category) {
+      memoryStore.addMemory(userId, item.category, item.content);
+    }
+  }
+}
+
 export interface ActivityDeps {
   ollamaClient: OpenAI;
   discordClient: DiscordClient;
   config: Config;
   stateStore: StateStore;
+  conversationStore: ConversationStore;
+  memoryStore: MemoryStore;
 }
 
 export function createActivities(deps: ActivityDeps) {
-  const { ollamaClient, discordClient, config, stateStore } = deps;
+  const { ollamaClient, discordClient, config, stateStore, conversationStore, memoryStore } = deps;
 
   function getTextChannel(name: string) {
     const guild = discordClient.guilds.cache.get(config.discord.guild_id);
@@ -64,6 +98,172 @@ export function createActivities(deps: ActivityDeps) {
       userMessage: string,
     ): Promise<string> {
       return chat(ollamaClient, model, systemPrompt, userMessage);
+    },
+
+    async chatWithConversation(
+      model: string,
+      systemPrompt: string,
+      conversationId: string,
+      userMessage: string,
+    ): Promise<string> {
+      const history = conversationStore.getHistory(conversationId);
+
+      // Extract userId from conversationId (dm:{userId} or guild:{channelId})
+      // For guild channels, use a generic userId since memories are per-user
+      const userId = conversationId.startsWith('dm:')
+        ? conversationId.slice(3)
+        : conversationId;
+
+      const toolRegistry = getToolRegistry({ config, memoryStore, userId });
+      const toolSpecs = getToolSpecs(toolRegistry);
+
+      // Inject relevant memories into the system prompt
+      let enrichedPrompt = systemPrompt;
+      const relevantMemories = memoryStore.searchMemories(userId, userMessage, 5);
+      const recentMemories = memoryStore.getRecentMemories(userId, 5);
+      // Deduplicate by ID
+      const seenIds = new Set(relevantMemories.map((m) => m.id));
+      const allMemories = [
+        ...relevantMemories,
+        ...recentMemories.filter((m) => !seenIds.has(m.id)),
+      ];
+      if (allMemories.length > 0) {
+        const memoryLines = allMemories
+          .map((m) => `- ${m.content} (${m.category}, ${m.created_at})`)
+          .join('\n');
+        enrichedPrompt += `\n\n## What you remember about this user:\n${memoryLines}`;
+      }
+
+      // Build message array: system prompt + history + new user message
+      const messages: import('openai/resources/chat/completions.js').ChatCompletionMessageParam[] = [
+        { role: 'system', content: enrichedPrompt },
+        ...history.map((m): import('openai/resources/chat/completions.js').ChatCompletionMessageParam => {
+          if (m.role === 'tool' && m.tool_call_id) {
+            return { role: 'tool', content: m.content, tool_call_id: m.tool_call_id };
+          }
+          if (m.role === 'assistant' && m.tool_calls) {
+            return {
+              role: 'assistant',
+              content: m.content,
+              tool_calls: JSON.parse(m.tool_calls),
+            };
+          }
+          if (m.role === 'assistant') {
+            return { role: 'assistant', content: m.content };
+          }
+          if (m.role === 'system') {
+            return { role: 'system', content: m.content };
+          }
+          return { role: 'user', content: m.content };
+        }),
+        { role: 'user', content: userMessage },
+      ];
+
+      // Persist user message
+      conversationStore.addMessage(conversationId, {
+        role: 'user',
+        content: userMessage,
+      });
+
+      // Tool-calling loop: send to LLM, execute tools if requested, repeat
+      const MAX_TOOL_ITERATIONS = 5;
+      let response = await chatWithHistory(ollamaClient, model, messages, toolSpecs);
+
+      for (let i = 0; i < MAX_TOOL_ITERATIONS && response.tool_calls?.length; i++) {
+        // Append assistant message with tool calls
+        messages.push({
+          role: 'assistant',
+          content: response.content ?? '',
+          tool_calls: response.tool_calls,
+        });
+
+        // Persist the assistant tool-call message
+        conversationStore.addMessage(conversationId, {
+          role: 'assistant',
+          content: response.content ?? '',
+          tool_calls: JSON.stringify(response.tool_calls),
+        });
+
+        // Execute each tool call
+        for (const toolCall of response.tool_calls) {
+          if (toolCall.type !== 'function') continue;
+          const tool = toolRegistry.get(toolCall.function.name);
+          let result: string;
+          if (tool) {
+            try {
+              const args = JSON.parse(toolCall.function.arguments || '{}') as Record<string, unknown>;
+              result = await tool.handler(args);
+            } catch (err) {
+              result = `Tool error: ${err instanceof Error ? err.message : 'unknown error'}`;
+            }
+          } else {
+            result = `Unknown tool: ${toolCall.function.name}`;
+          }
+
+          messages.push({
+            role: 'tool',
+            content: result,
+            tool_call_id: toolCall.id,
+          });
+
+          // Persist tool result
+          conversationStore.addMessage(conversationId, {
+            role: 'tool',
+            content: result,
+            tool_call_id: toolCall.id,
+          });
+        }
+
+        // Send tool results back to the LLM
+        response = await chatWithHistory(ollamaClient, model, messages, toolSpecs);
+      }
+
+      // Persist final assistant reply
+      conversationStore.addMessage(conversationId, {
+        role: 'assistant',
+        content: response.content ?? '(no response)',
+        tool_calls: response.tool_calls ? JSON.stringify(response.tool_calls) : null,
+      });
+
+      // Summarize if history is getting long
+      await conversationStore.summarizeAndTruncate(conversationId, ollamaClient, model);
+
+      let text = response.content ?? '(no response)';
+      // Strip Qwen 3 <think>...</think> blocks
+      text = text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+
+      // Background memory extraction — don't fail the chat if this errors
+      try {
+        await extractMemoriesFromExchange(ollamaClient, memoryStore, model, userId, userMessage, text);
+      } catch {
+        // Memory extraction is best-effort
+      }
+
+      return text;
+    },
+
+    async listMemories(userId: string): Promise<string> {
+      const memories = memoryStore.getAllMemories(userId);
+      if (memories.length === 0) return 'No memories stored.';
+      return memories
+        .map((m) => `**#${m.id}** [${m.category}] ${m.content} _(${m.created_at})_`)
+        .join('\n');
+    },
+
+    async forgetMemory(userId: string, keyword: string): Promise<string> {
+      // Try to parse as numeric ID first
+      const id = parseInt(keyword, 10);
+      if (!isNaN(id)) {
+        memoryStore.deactivateMemory(id);
+        return `Forgot memory #${id}.`;
+      }
+      // Otherwise search by keyword and deactivate matches
+      const matches = memoryStore.searchMemories(userId, keyword, 5);
+      if (matches.length === 0) return `No memories found matching "${keyword}".`;
+      for (const m of matches) {
+        memoryStore.deactivateMemory(m.id);
+      }
+      return `Forgot ${matches.length} memory/memories matching "${keyword}".`;
     },
 
     async getLastUid(accountName: string): Promise<number> {
