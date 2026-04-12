@@ -10,6 +10,7 @@ import { chat, chatWithHistory } from '../ollama.js';
 import type { ConversationStore } from '../discord/conversation.js';
 import { getToolRegistry, getToolSpecs } from '../tools/registry.js';
 import type { MemoryStore } from '../memory/store.js';
+import { extractExplicitMemory } from '../memory/explicit-trigger.js';
 import { fetchNewEmails, fetchOldestFromFolder, moveEmails } from '../email/imap.js';
 import { buildTriagePrompt, parseTriageResponse } from '../email/triage.js';
 import { buildCategorizePrompt, parseCategorizeResponse } from '../email/categorize.js';
@@ -42,35 +43,6 @@ function slugifyTitle(title: string): string {
     .replace(/-+/g, '-')            // collapse consecutive dashes
     .replace(/^-|-$/g, '')          // trim leading/trailing dashes
     || 'untitled';
-}
-
-async function extractMemoriesFromExchange(
-  ollamaClient: OpenAI,
-  memoryStore: MemoryStore,
-  model: string,
-  userId: string,
-  userMessage: string,
-  assistantReply: string,
-): Promise<void> {
-  const extractPrompt =
-    'Extract any new facts, preferences, or important personal details about the user from this conversation exchange. ' +
-    'Return a JSON array of objects with "category" (one of: preference, fact, project, relationship) and "content" (the fact). ' +
-    'Return an empty array [] if nothing notable was shared. Only extract clear, specific facts — not vague statements.';
-
-  const raw = await chat(ollamaClient, model, extractPrompt, `User: ${userMessage}\nAssistant: ${assistantReply}`);
-
-  // Strip think blocks before parsing
-  const cleaned = raw.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-
-  // Find JSON array in the response
-  const match = cleaned.match(/\[[\s\S]*\]/);
-  if (!match) return;
-  const extracted = JSON.parse(match[0]) as Array<{ category: string; content: string }>;
-  for (const item of extracted) {
-    if (item.content && item.category) {
-      memoryStore.addMemory(userId, item.category, item.content);
-    }
-  }
 }
 
 export interface ActivityDeps {
@@ -113,6 +85,13 @@ export function createActivities(deps: ActivityDeps) {
       const userId = conversationId.startsWith('dm:')
         ? conversationId.slice(3)
         : conversationId;
+
+      // Deterministic explicit-only memory save — runs before recall so the
+      // freshly-saved fact shows up in this same turn's memory context.
+      const explicit = extractExplicitMemory(userMessage);
+      if (explicit) {
+        memoryStore.addMemory(userId, 'fact', explicit.content);
+      }
 
       const toolRegistry = getToolRegistry({ config, memoryStore, userId });
       const toolSpecs = getToolSpecs(toolRegistry);
@@ -231,13 +210,6 @@ export function createActivities(deps: ActivityDeps) {
       let text = response.content ?? '(no response)';
       // Strip Qwen 3 <think>...</think> blocks
       text = text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-
-      // Background memory extraction — don't fail the chat if this errors
-      try {
-        await extractMemoriesFromExchange(ollamaClient, memoryStore, model, userId, userMessage, text);
-      } catch {
-        // Memory extraction is best-effort
-      }
 
       return text;
     },

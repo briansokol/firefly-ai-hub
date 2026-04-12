@@ -123,9 +123,20 @@ sudo systemctl enable --now ai-hub
 
 - `DISCORD_TOKEN` – Discord bot token
 - `GMAIL_APP_PASSWORD` – Gmail IMAP app password
+- `MEMORY_API_TOKEN` – Shared secret for the memory HTTP API on :8787 (consumed by the Open WebUI filter). Required at startup.
 - `CONFIG_PATH` – Override config file location (default: `/opt/ai-hub/config.toml`)
 - `STATE_DIR` – Override state database directory (default: `~/.local/share/firefly-ai-hub`)
 - `TEMPORAL_ADDRESS` – Override Temporal client address (default: `localhost:7233`)
+
+## Memory system
+
+Memory writes are **deterministic and explicit-only** across both Discord and Open WebUI. A fact is saved if and only if the user message starts with a trigger phrase (`remember`, `remember that`, `note that`, `don't forget`, `save this`, `make a note`). Mid-sentence mentions like "I remember when…" never save — anchoring to the start of the message is the key rule.
+
+- Regex source of truth: `hub/src/memory/explicit-trigger.ts`
+- Python port: `deploy/open-webui/functions/hub_memory_filter.py` (must stay in lockstep)
+- Memory store: `hub/src/memory/store.ts` (SQLite + FTS5, same DB shared by both surfaces)
+- HTTP bridge for Open WebUI: `hub/src/memory/http.ts` on port 8787 inside the `ai-hub` container, reachable as `http://ai-hub:8787` from other compose services
+- Open WebUI user_id namespace: `openwebui:<oui-id>` by default (per-user isolated); an override map in the filter's valves bridges specific OUI accounts to Discord snowflakes for cross-surface memory.
 
 ## Important Notes
 

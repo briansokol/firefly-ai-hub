@@ -5,7 +5,7 @@ import { createWebSearchTool } from './web-search.js';
 import { createWeatherTool } from './weather.js';
 import { createDateTimeTool } from './datetime.js';
 import { createSystemInfoTool } from './system-info.js';
-import { createRememberTool, createRecallTool } from './memory-tools.js';
+import { createRecallTool } from './memory-tools.js';
 import { createFetchUrlTool } from './fetch-url.js';
 
 export interface ToolDefinition {
@@ -39,7 +39,6 @@ export function getToolRegistry(opts: ToolRegistryOptions): Map<string, ToolDefi
   addTool(registry, createFetchUrlTool(config));
 
   if (memoryStore && userId) {
-    addTool(registry, createRememberTool(memoryStore, userId));
     addTool(registry, createRecallTool(memoryStore, userId));
   }
 

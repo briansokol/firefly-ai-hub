@@ -10,6 +10,7 @@ services:
         condition: service_healthy
     env_file:
       - /etc/ai-hub/hub.env
+      - /etc/ai-hub/memory.env
     environment:
       - CONFIG_PATH=/app/config.toml
       - STATE_DIR=/var/lib/ai-hub
@@ -37,14 +38,25 @@ services:
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
     restart: unless-stopped
+    env_file:
+      - /etc/ai-hub/memory.env
     ports:
-      - "127.0.0.1:3000:8080"
+      - "0.0.0.0:3000:8080"
     environment:
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - open-webui:/app/backend/data
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    env_file:
+      - /etc/ai-hub/hub.env
+    depends_on:
+      - open-webui
 
   temporal-ui:
     image: temporalio/ui:latest
