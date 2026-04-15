@@ -30,7 +30,7 @@ async function main() {
   const conversationStore = createConversationStore(dbPath);
   const memoryStore = createMemoryStore(dbPath);
 
-  const memoryHttpServer = createMemoryHttpServer(memoryStore, memoryApiToken);
+  const memoryHttpServer = createMemoryHttpServer(memoryStore, memoryApiToken, config);
   await new Promise<void>((resolve, reject) => {
     memoryHttpServer.once('error', reject);
     memoryHttpServer.listen(MEMORY_HTTP_PORT, '0.0.0.0', () => {
