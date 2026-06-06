@@ -72,6 +72,15 @@ export async function registerSchedules(config: Config, client: Client): Promise
     [],
   );
 
+  // Memory distillation — hourly
+  await ensureSchedule(
+    client,
+    'memory-distill',
+    { cronExpression: '0 * * * *', timezone: config.schedule.timezone },
+    'memoryDistillWorkflow',
+    [],
+  );
+
   const tz = config.schedule.timezone;
   await ensureSchedule(client, 'rgb-work',  { cronExpression: '0 8 * * 1-5', timezone: tz }, 'rgbWorkflow', ['work']);
   await ensureSchedule(client, 'rgb-night', { cronExpression: '0 21 * * *',   timezone: tz }, 'rgbWorkflow', ['night']);

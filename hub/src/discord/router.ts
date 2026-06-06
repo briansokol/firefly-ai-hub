@@ -53,16 +53,6 @@ export function parseClearCommand(content: string): boolean {
   return /^!clear$/i.test(content);
 }
 
-export function parseMemoriesCommand(content: string): boolean {
-  return /^!memories$/i.test(content);
-}
-
-export function parseForgetCommand(content: string): { keyword: string } | null {
-  const match = content.match(/^!forget\s+(.+)$/i);
-  if (!match) return null;
-  return { keyword: match[1].trim() };
-}
-
 export function resolveRoute(channelName: string, content: string, config: Config): Route {
   if (content.startsWith('/think ')) {
     return {

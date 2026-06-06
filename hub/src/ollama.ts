@@ -30,6 +30,16 @@ export async function chat(
   return response.choices[0]?.message?.content ?? '(no response)';
 }
 
+/** Embed a single text via the OpenAI-compatible /v1/embeddings endpoint. */
+export async function embed(
+  client: OpenAI,
+  model: string,
+  input: string,
+): Promise<number[]> {
+  const response = await client.embeddings.create({ model, input });
+  return response.data[0]?.embedding ?? [];
+}
+
 /** Multi-turn chat with full message history and optional tool definitions. */
 export async function chatWithHistory(
   client: OpenAI,

@@ -6,16 +6,17 @@ import type { Client as DiscordClient } from 'discord.js';
 import type { Config } from '../types.js';
 import type { StateStore } from '../email/state.js';
 import type { FetchedEmail } from '../email/imap.js';
-import { chat, chatWithHistory } from '../ollama.js';
+import { chat, chatWithHistory, embed } from '../ollama.js';
 import type { ConversationStore } from '../discord/conversation.js';
+import type { SyncStore } from '../sync/store.js';
+import { ensureCollection, upsertPoint } from '../sync/qdrant.js';
 import { getToolRegistry, getToolSpecs } from '../tools/registry.js';
-import type { MemoryStore } from '../memory/store.js';
-import { extractExplicitMemory } from '../memory/explicit-trigger.js';
 import { fetchNewEmails, fetchOldestFromFolder, moveEmails } from '../email/imap.js';
 import { buildTriagePrompt, parseTriageResponse } from '../email/triage.js';
 import { buildCategorizePrompt, parseCategorizeResponse } from '../email/categorize.js';
 import type { CategorizeResult } from '../email/categorize.js';
-import type { CategorizationEntry } from '../email/state.js';
+import type { CategorizationEntry, CategoryCount } from '../email/state.js';
+import { renderCategoryThread } from '../email/digest-render.js';
 import { getEmailPassword } from '../config.js';
 import type { RgbPreset } from './workflow-types.js';
 import { setRgb } from '../rgb-client.js';
@@ -51,11 +52,17 @@ export interface ActivityDeps {
   config: Config;
   stateStore: StateStore;
   conversationStore: ConversationStore;
-  memoryStore: MemoryStore;
+  syncStore: SyncStore;
+  qdrantUrl: string;
 }
 
+// Memory-distillation constants. Dims must match the embed model.
+export const MEMORY_COLLECTION = 'memories';
+export const EMBED_MODEL = 'nomic-embed-text';
+export const EMBED_DIMS = 768;
+
 export function createActivities(deps: ActivityDeps) {
-  const { ollamaClient, discordClient, config, stateStore, conversationStore, memoryStore } = deps;
+  const { ollamaClient, discordClient, config, stateStore, conversationStore, syncStore, qdrantUrl } = deps;
 
   function getTextChannel(name: string) {
     const guild = discordClient.guilds.cache.get(config.discord.guild_id);
@@ -80,42 +87,12 @@ export function createActivities(deps: ActivityDeps) {
     ): Promise<string> {
       const history = conversationStore.getHistory(conversationId);
 
-      // Extract userId from conversationId (dm:{userId} or guild:{channelId})
-      // For guild channels, use a generic userId since memories are per-user
-      const userId = conversationId.startsWith('dm:')
-        ? conversationId.slice(3)
-        : conversationId;
-
-      // Deterministic explicit-only memory save — runs before recall so the
-      // freshly-saved fact shows up in this same turn's memory context.
-      const explicit = extractExplicitMemory(userMessage);
-      if (explicit) {
-        memoryStore.addMemory(userId, 'fact', explicit.content);
-      }
-
-      const toolRegistry = getToolRegistry({ config, memoryStore, userId });
+      const toolRegistry = getToolRegistry({ config });
       const toolSpecs = getToolSpecs(toolRegistry);
-
-      // Inject relevant memories into the system prompt
-      let enrichedPrompt = systemPrompt;
-      const relevantMemories = memoryStore.searchMemories(userId, userMessage, 5);
-      const recentMemories = memoryStore.getRecentMemories(userId, 5);
-      // Deduplicate by ID
-      const seenIds = new Set(relevantMemories.map((m) => m.id));
-      const allMemories = [
-        ...relevantMemories,
-        ...recentMemories.filter((m) => !seenIds.has(m.id)),
-      ];
-      if (allMemories.length > 0) {
-        const memoryLines = allMemories
-          .map((m) => `- ${m.content} (${m.category}, ${m.created_at})`)
-          .join('\n');
-        enrichedPrompt += `\n\n## What you remember about this user:\n${memoryLines}`;
-      }
 
       // Build message array: system prompt + history + new user message
       const messages: import('openai/resources/chat/completions.js').ChatCompletionMessageParam[] = [
-        { role: 'system', content: enrichedPrompt },
+        { role: 'system', content: systemPrompt },
         ...history.map((m): import('openai/resources/chat/completions.js').ChatCompletionMessageParam => {
           if (m.role === 'tool' && m.tool_call_id) {
             return { role: 'tool', content: m.content, tool_call_id: m.tool_call_id };
@@ -214,28 +191,59 @@ export function createActivities(deps: ActivityDeps) {
       return text;
     },
 
-    async listMemories(userId: string): Promise<string> {
-      const memories = memoryStore.getAllMemories(userId);
-      if (memories.length === 0) return 'No memories stored.';
-      return memories
-        .map((m) => `**#${m.id}** [${m.category}] ${m.content} _(${m.created_at})_`)
-        .join('\n');
+    // --- Memory distillation (F2) ---
+
+    async listDistillUsers(): Promise<string[]> {
+      return syncStore.listUserIds();
     },
 
-    async forgetMemory(userId: string, keyword: string): Promise<string> {
-      // Try to parse as numeric ID first
-      const id = parseInt(keyword, 10);
-      if (!isNaN(id)) {
-        memoryStore.deactivateMemory(id);
-        return `Forgot memory #${id}.`;
+    /**
+     * Distill durable facts/preferences from a user's new conversation messages,
+     * store them in Postgres, embed them, and upsert vectors to Qdrant.
+     * Returns the number of memories created.
+     */
+    async distillUserMemories(userId: string): Promise<number> {
+      const since = await syncStore.getDistillCursor(userId);
+      const messages = await syncStore.getMessagesSince(userId, since);
+      if (messages.length === 0) return 0;
+
+      const transcript = messages
+        .map((m) => `${m.role}: ${m.content}`)
+        .join('\n');
+
+      const system =
+        'Extract durable facts and preferences about the user from this conversation ' +
+        'transcript. Output one fact per line with no numbering or bullet characters. ' +
+        'Only include stable, long-term information (preferences, relationships, ongoing ' +
+        'projects, personal details). Do not include transient chit-chat or questions. ' +
+        'If there are no durable facts, output nothing.';
+
+      const raw = await chat(ollamaClient, config.models.complex, system, transcript);
+      const cleaned = raw.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+      const facts = Array.from(
+        new Set(
+          cleaned
+            .split('\n')
+            .map((l) => l.replace(/^[\s*\-•\d.]+/, '').trim())
+            .filter((l) => l.length >= 3),
+        ),
+      );
+
+      if (facts.length > 0) {
+        await ensureCollection(qdrantUrl, MEMORY_COLLECTION, EMBED_DIMS);
+        // Most recent conversation in this batch, used as the memory's source.
+        const sourceConversation = messages[messages.length - 1].conversation_id;
+        for (const fact of facts) {
+          const row = await syncStore.insertMemory(userId, fact, sourceConversation);
+          const vector = await embed(ollamaClient, EMBED_MODEL, fact);
+          await upsertPoint(qdrantUrl, MEMORY_COLLECTION, row.id, vector, { user_id: userId });
+        }
       }
-      // Otherwise search by keyword and deactivate matches
-      const matches = memoryStore.searchMemories(userId, keyword, 5);
-      if (matches.length === 0) return `No memories found matching "${keyword}".`;
-      for (const m of matches) {
-        memoryStore.deactivateMemory(m.id);
-      }
-      return `Forgot ${matches.length} memory/memories matching "${keyword}".`;
+
+      // Advance the cursor to the newest message processed.
+      const newest = messages[messages.length - 1].created_at;
+      await syncStore.setDistillCursor(userId, newest);
+      return facts.length;
     },
 
     async getLastUid(accountName: string): Promise<number> {
@@ -297,10 +305,40 @@ export function createActivities(deps: ActivityDeps) {
       return chat(ollamaClient, config.models.default, system, user);
     },
 
-    async postDailySummary(summary: string): Promise<void> {
+    async postDailySummaryWithThread(
+      summary: string,
+      digest: {
+        counts: CategoryCount[];
+        byCategory: Record<string, CategorizationEntry[]>;
+      },
+    ): Promise<void> {
       const channel = getTextChannel('daily-summary');
-      if (channel) {
-        await channel.send(`📅 **Daily Summary**\n${summary}`);
+      if (!channel) return;
+
+      let mainBody = `📅 **Daily Summary**\n${summary}`;
+      if (digest.counts.length > 0) {
+        const total = digest.counts.reduce((sum, c) => sum + c.count, 0);
+        const breakdown = digest.counts.map((c) => `${c.count} ${c.category}`).join(', ');
+        mainBody += `\n\n📬 **Email:** Categorized ${total} emails: ${breakdown}`;
+      }
+
+      const message = await channel.send(mainBody);
+
+      const categories = Object.keys(digest.byCategory);
+      if (categories.length === 0) return;
+
+      if (typeof (message as { startThread?: unknown }).startThread !== 'function') return;
+
+      const todayISO = new Date().toISOString().slice(0, 10);
+      const thread = await message.startThread({
+        name: `Email Digest — ${todayISO}`,
+        autoArchiveDuration: 1440,
+      });
+
+      for (const category of categories) {
+        const entries = digest.byCategory[category];
+        if (entries.length === 0) continue;
+        await thread.send(renderCategoryThread(category, entries));
       }
     },
 
@@ -345,7 +383,7 @@ export function createActivities(deps: ActivityDeps) {
 
     async recordCategorizationResults(
       accountName: string,
-      results: Array<{ uid: number; subject: string; from: string; category: string; reason: string; needsResponse: boolean }>,
+      results: Array<{ uid: number; subject: string; from: string; category: string; reason: string; summary: string; needsResponse: boolean }>,
     ): Promise<void> {
       for (const r of results) {
         stateStore.logCategorization({
@@ -355,6 +393,7 @@ export function createActivities(deps: ActivityDeps) {
           sender: r.from,
           category: r.category,
           reason: r.reason,
+          summary: r.summary,
           needsResponse: r.needsResponse,
         });
       }
@@ -372,12 +411,18 @@ export function createActivities(deps: ActivityDeps) {
       }
     },
 
-    async getCategorizationSummary(accountName: string): Promise<string> {
+    async getDailyEmailDigest(accountName: string): Promise<{
+      counts: CategoryCount[];
+      byCategory: Record<string, CategorizationEntry[]>;
+    }> {
       const counts = stateStore.getTodaySummary(accountName);
-      if (counts.length === 0) return '';
-      const total = counts.reduce((sum, c) => sum + c.count, 0);
-      const breakdown = counts.map((c) => `${c.count} ${c.category}`).join(', ');
-      return `Categorized ${total} emails: ${breakdown}`;
+      const recent = stateStore.getRecentCategorizations(accountName, 24);
+      const byCategory: Record<string, CategorizationEntry[]> = {};
+      for (const row of recent) {
+        if (!byCategory[row.category]) byCategory[row.category] = [];
+        byCategory[row.category].push(row);
+      }
+      return { counts, byCategory };
     },
 
     // ── Shorts Phase 1 activities ──────────────────────────────────────────

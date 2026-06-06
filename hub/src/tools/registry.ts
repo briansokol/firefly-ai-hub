@@ -1,11 +1,9 @@
 import type { ChatCompletionTool, ChatCompletionFunctionTool } from 'openai/resources/chat/completions.js';
 import type { Config } from '../types.js';
-import type { MemoryStore } from '../memory/store.js';
 import { createWebSearchTool } from './web-search.js';
 import { createWeatherTool } from './weather.js';
 import { createDateTimeTool } from './datetime.js';
 import { createSystemInfoTool } from './system-info.js';
-import { createRecallTool } from './memory-tools.js';
 import { createFetchUrlTool } from './fetch-url.js';
 
 export interface ToolDefinition {
@@ -16,8 +14,6 @@ export interface ToolDefinition {
 
 export interface ToolRegistryOptions {
   config: Config;
-  memoryStore?: MemoryStore;
-  userId?: string;
 }
 
 function addTool(registry: Map<string, ToolDefinition>, tool: ToolDefinition): void {
@@ -25,7 +21,7 @@ function addTool(registry: Map<string, ToolDefinition>, tool: ToolDefinition): v
 }
 
 export function getToolRegistry(opts: ToolRegistryOptions): Map<string, ToolDefinition> {
-  const { config, memoryStore, userId } = opts;
+  const { config } = opts;
   const registry = new Map<string, ToolDefinition>();
 
   addTool(registry, createDateTimeTool());
@@ -37,10 +33,6 @@ export function getToolRegistry(opts: ToolRegistryOptions): Map<string, ToolDefi
   }
 
   addTool(registry, createFetchUrlTool(config));
-
-  if (memoryStore && userId) {
-    addTool(registry, createRecallTool(memoryStore, userId));
-  }
 
   return registry;
 }

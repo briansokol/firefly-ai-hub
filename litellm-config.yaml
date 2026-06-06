@@ -1,0 +1,47 @@
+# litellm-config.yaml — Firefly gateway (Phase F0)
+#
+# Runs as the `litellm` service in deploy/docker-compose.yml, mounted at
+# /app/config.yaml. The container reaches host Ollama via host.docker.internal.
+#
+# The client only ever asks for the LOGICAL names below (chat-heavy / code / fast /
+# frontier). Which hardware answers is decided here, so you can swap models without
+# touching the app. Model tags below match `ollama list` on Firefly.
+
+model_list:
+  # --- Home base: Firefly RTX 3090 via Ollama ---
+  - model_name: chat-heavy            # general + agentic; also memory distillation
+    litellm_params:
+      model: ollama_chat/qwen3.6:27b-q4_k_m
+      api_base: http://host.docker.internal:11434
+
+  - model_name: code                  # whole-file / script generation
+    litellm_params:
+      model: ollama_chat/qwen3-coder:30b
+      api_base: http://host.docker.internal:11434
+
+  - model_name: fast                  # quick replies, routing, triage
+    litellm_params:
+      model: ollama_chat/qwen3:4b
+      api_base: http://host.docker.internal:11434
+
+  # --- Cloud fallback: frontier quality when local can't cut it ---
+  # The entry is defined so the ability exists, but it is NOT wired into the
+  # fallback chain yet and ANTHROPIC_API_KEY is intentionally not required.
+  # To activate: set ANTHROPIC_API_KEY in /etc/ai-hub/hub.env, then uncomment
+  # the `{"chat-heavy": ["frontier"]}` fallback below.
+  - model_name: frontier
+    litellm_params:
+      model: anthropic/claude-opus-4-8   # swap to a Sonnet/Haiku tier for cheaper fallback
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+litellm_settings:
+  drop_params: true                   # ignore params a given backend doesn't support
+  # If a local model errors/times out, fall through to another LOCAL model.
+  # The frontier (cloud) hop is intentionally left commented out for now.
+  fallbacks:
+    - {"code": ["chat-heavy"]}
+    - {"fast": ["chat-heavy"]}
+    # - {"chat-heavy": ["frontier"]}   # enable once ANTHROPIC_API_KEY is set
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY   # single key for now; per-person keys in Phase F3

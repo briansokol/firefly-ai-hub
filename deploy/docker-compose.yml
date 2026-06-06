@@ -8,6 +8,8 @@ services:
     depends_on:
       temporal:
         condition: service_healthy
+      postgresql:
+        condition: service_healthy
     env_file:
       - /etc/ai-hub/hub.env
       - /etc/ai-hub/memory.env
@@ -15,6 +17,10 @@ services:
       - CONFIG_PATH=/app/config.toml
       - STATE_DIR=/var/lib/ai-hub
       - TEMPORAL_ADDRESS=temporal:7233
+    ports:
+      # Sync API for app clients. Bound to localhost; expose to the tailnet with
+      # `tailscale serve 8788` rather than publishing on 0.0.0.0 (guardrail).
+      - "127.0.0.1:8788:8788"
     volumes:
       - /opt/ai-hub/config.toml:/app/config.toml:ro
       - hub-state:/var/lib/ai-hub
@@ -34,6 +40,19 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    restart: unless-stopped
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    env_file:
+      - /etc/ai-hub/hub.env
+    ports:
+      - "100.100.205.20:4000:4000"
+    volumes:
+      - /home/bsokol/firefly-ai-hub/litellm-config.yaml:/app/config.yaml:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
@@ -110,6 +129,14 @@ services:
       retries: 10
       start_period: 30s
 
+  qdrant:
+    image: qdrant/qdrant
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6333:6333"
+    volumes:
+      - qdrant-data:/qdrant/storage
+
   postgresql:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -129,3 +156,4 @@ volumes:
   hub-state:
   open-webui:
   temporal-db:
+  qdrant-data:

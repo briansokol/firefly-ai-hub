@@ -4,26 +4,34 @@ import type { Activities } from './activities.js';
 const {
   callOllama,
   chatWithConversation,
-  listMemories,
-  forgetMemory,
   getLastUid,
   fetchEmails,
   triageWithOllama,
   postEmailResult,
   updateLastUid,
   generateDailySummary,
-  postDailySummary,
+  postDailySummaryWithThread,
   setRgbPreset,
   fetchOldestEmails,
   categorizeWithOllama,
   moveEmailsToFolders,
   recordCategorizationResults,
-  getCategorizationSummary,
+  getDailyEmailDigest,
 } = proxyActivities<Activities>({
   startToCloseTimeout: '5 minutes',
   retry: {
     maximumAttempts: 3,
     initialInterval: '2s',
+    backoffCoefficient: 2,
+  },
+});
+
+// Distillation runs a heavy LLM + embeddings per user; give it a longer budget.
+const { listDistillUsers, distillUserMemories } = proxyActivities<Activities>({
+  startToCloseTimeout: '15 minutes',
+  retry: {
+    maximumAttempts: 2,
+    initialInterval: '5s',
     backoffCoefficient: 2,
   },
 });
@@ -37,12 +45,11 @@ export async function chatWorkflow(
   return chatWithConversation(model, systemPrompt, conversationId, userMessage);
 }
 
-export async function listMemoriesWorkflow(userId: string): Promise<string> {
-  return listMemories(userId);
-}
-
-export async function forgetMemoryWorkflow(userId: string, keyword: string): Promise<string> {
-  return forgetMemory(userId, keyword);
+export async function memoryDistillWorkflow(): Promise<void> {
+  const users = await listDistillUsers();
+  for (const userId of users) {
+    await distillUserMemories(userId);
+  }
 }
 
 export async function emailTriageWorkflow(accountName: string): Promise<void> {
@@ -74,7 +81,7 @@ export async function emailCategorizationWorkflow(accountName: string): Promise<
 
   const categorized: Array<{
     uid: number; subject: string; from: string;
-    category: string; reason: string; needsResponse: boolean;
+    category: string; reason: string; summary: string; needsResponse: boolean;
   }> = [];
   const moves: Array<{ uid: number; destFolder: string }> = [];
 
@@ -86,6 +93,7 @@ export async function emailCategorizationWorkflow(accountName: string): Promise<
       from: email.from,
       category: result.category,
       reason: result.reason,
+      summary: result.summary,
       needsResponse: result.needsResponse,
     });
     moves.push({ uid: email.uid, destFolder: `${sourceFolder}/${result.category}` });
@@ -100,14 +108,8 @@ export async function emailCategorizationWorkflow(accountName: string): Promise<
 
 export async function dailySummaryWorkflow(): Promise<void> {
   const summary = await generateDailySummary();
-
-  // Append email categorization stats if available
-  const emailSummary = await getCategorizationSummary('fastmail');
-  const fullSummary = emailSummary
-    ? `${summary}\n\n📬 **Email:** ${emailSummary}`
-    : summary;
-
-  await postDailySummary(fullSummary);
+  const digest = await getDailyEmailDigest('fastmail');
+  await postDailySummaryWithThread(summary, digest);
 }
 
 export async function rgbWorkflow(preset: import('./workflow-types.js').RgbPreset): Promise<void> {

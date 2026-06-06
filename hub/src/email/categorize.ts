@@ -4,6 +4,7 @@ export interface CategorizeResult {
   category: string;
   confidence: number;
   reason: string;
+  summary: string;
   needsResponse: boolean;
 }
 
@@ -19,10 +20,10 @@ Categories:
 - VIP: Personal emails from a real, identifiable human who is writing to you directly — not a company, brand, marketing team, or automated system. The email must read as genuine human correspondence, not a templated or bulk message.
 - Other: Anything that doesn't clearly fit the above categories. When in doubt, choose Other.
 
-Also determine if the email expects or requires a response from the recipient.
+Also determine if the email expects or requires a response from the recipient, and produce a short summary describing what the email said (independent of the category reasoning).
 
 Respond with ONLY a JSON object — no prose, no markdown, no explanation:
-{"category": "<category name>", "confidence": <0.0-1.0>, "reason": "<brief one-sentence explanation>", "needsResponse": <true if the email expects a reply, otherwise false>}`;
+{"category": "<category name>", "confidence": <0.0-1.0>, "reason": "<brief one-sentence explanation of the category choice>", "summary": "<1-2 sentences describing what the email said>", "needsResponse": <true if the email expects a reply, otherwise false>}`;
 
 export function buildCategorizePrompt(email: FetchedEmail): { system: string; user: string } {
   const d = email.date instanceof Date ? email.date : new Date(email.date as unknown as string);
@@ -57,6 +58,7 @@ export function parseCategorizeResponse(
       category,
       confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.5,
       reason: typeof parsed.reason === 'string' ? parsed.reason : 'Unable to parse reason',
+      summary: typeof parsed.summary === 'string' ? parsed.summary : '',
       needsResponse: parsed.needsResponse === true,
     };
   } catch {
@@ -64,6 +66,7 @@ export function parseCategorizeResponse(
       category: defaultCategory,
       confidence: 0,
       reason: 'Failed to parse LLM response',
+      summary: '',
       needsResponse: false,
     };
   }
