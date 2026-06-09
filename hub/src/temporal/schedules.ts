@@ -51,13 +51,13 @@ export async function registerSchedules(config: Config, client: Client): Promise
     );
   }
 
-  // Email categorization — every 5 minutes, batch of 10
+  // Email categorization — hourly, batch of 10
   if (config.email.categorization?.enabled) {
     for (const account of config.email.accounts) {
       await ensureSchedule(
         client,
         `email-categorize-${account.name}`,
-        { cronExpression: '*/5 * * * *', timezone: config.schedule.timezone },
+        { cronExpression: '0 * * * *', timezone: config.schedule.timezone },
         'emailCategorizationWorkflow',
         [account.name],
       );
@@ -72,11 +72,11 @@ export async function registerSchedules(config: Config, client: Client): Promise
     [],
   );
 
-  // Memory distillation — hourly
+  // Memory distillation — every 15 minutes
   await ensureSchedule(
     client,
     'memory-distill',
-    { cronExpression: '0 * * * *', timezone: config.schedule.timezone },
+    { cronExpression: '*/15 * * * *', timezone: config.schedule.timezone },
     'memoryDistillWorkflow',
     [],
   );
