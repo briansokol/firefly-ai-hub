@@ -18,9 +18,9 @@ services:
       - STATE_DIR=/var/lib/ai-hub
       - TEMPORAL_ADDRESS=temporal:7233
     ports:
-      # Sync API for app clients. Bound to localhost; expose to the tailnet with
-      # `tailscale serve 8788` rather than publishing on 0.0.0.0 (guardrail).
-      - "127.0.0.1:8788:8788"
+      # Sync API for app clients. Bound to the tailscale interface IP so it is
+      # reachable over the tailnet (firefly:8788) but not on 0.0.0.0 (guardrail).
+      - "100.100.205.20:8788:8788"
     volumes:
       - /opt/ai-hub/config.toml:/app/config.toml:ro
       - hub-state:/var/lib/ai-hub
