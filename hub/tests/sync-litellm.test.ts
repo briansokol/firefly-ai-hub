@@ -37,3 +37,19 @@ describe('litellm virtual keys', () => {
     ).rejects.toThrow(/key\/generate failed/i);
   });
 });
+
+import { mintToken, hashToken } from '../src/sync/provision.js';
+
+describe('device token helpers', () => {
+  it('mints a url-safe token and hashes it deterministically', () => {
+    const t = mintToken();
+    expect(t).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(t.length).toBeGreaterThanOrEqual(32);
+
+    const h1 = hashToken(t);
+    const h2 = hashToken(t);
+    expect(h1).toBe(h2);
+    expect(h1).toMatch(/^[0-9a-f]{64}$/);
+    expect(hashToken('different')).not.toBe(h1);
+  });
+});
