@@ -8,7 +8,7 @@ import { createDiscordBot, startDiscordBot } from './discord/bot.js';
 import { createStateStore } from './email/state.js';
 import { createConversationStore } from './discord/conversation.js';
 import { createWebToolsHttpServer } from './web/http.js';
-import { createSyncStore } from './sync/store.js';
+import { createSyncStore, ensureDatabaseExists } from './sync/store.js';
 import { createSyncHttpServer } from './sync/http.js';
 import { search as qdrantSearch } from './sync/qdrant.js';
 import { embed } from './ollama.js';
@@ -59,6 +59,12 @@ async function main() {
   // Sync service (Postgres-backed delta sync for app clients). Creates the
   // firefly_sync database + schema on first boot.
   const syncStore = await createSyncStore(syncDbUrl);
+  // LiteLLM stores virtual keys in its own Postgres DB; create it if missing.
+  // LiteLLM runs its own Prisma migrations on boot and self-heals via restart policy.
+  const litellmDbUrl = process.env.LITELLM_DB_URL;
+  if (litellmDbUrl) {
+    await ensureDatabaseExists(litellmDbUrl);
+  }
   const memorySearch = async (userId: string | undefined, q: string, k: number) => {
     const uid = userId ?? (await syncStore.getDefaultUserId());
     const vector = await embed(ollamaClient, EMBED_MODEL, q);

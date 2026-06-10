@@ -44,4 +44,4 @@ litellm_settings:
     # - {"chat-heavy": ["frontier"]}   # enable once ANTHROPIC_API_KEY is set
 
 general_settings:
-  master_key: os.environ/LITELLM_MASTER_KEY   # single key for now; per-person keys in Phase F3
+  master_key: os.environ/LITELLM_MASTER_KEY   # admin key; per-user virtual keys via /key/generate (F3, DB-backed via DATABASE_URL)

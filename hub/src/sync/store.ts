@@ -93,7 +93,7 @@ function maintenanceUrl(connectionString: string): string {
 }
 
 /** Connect to the maintenance DB and CREATE DATABASE if it does not exist. */
-async function ensureDatabase(connectionString: string): Promise<void> {
+export async function ensureDatabaseExists(connectionString: string): Promise<void> {
   const dbName = databaseName(connectionString);
   const admin = new Client({ connectionString: maintenanceUrl(connectionString) });
   await admin.connect();
@@ -109,7 +109,7 @@ async function ensureDatabase(connectionString: string): Promise<void> {
 }
 
 export async function createSyncStore(connectionString: string): Promise<SyncStore> {
-  await ensureDatabase(connectionString);
+  await ensureDatabaseExists(connectionString);
   const pool = new Pool({ connectionString });
 
   await pool.query(SCHEMA_SQL);

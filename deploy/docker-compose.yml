@@ -45,6 +45,13 @@ services:
     image: ghcr.io/berriai/litellm:main-latest
     restart: unless-stopped
     command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      # Enables LiteLLM's key-management store (/key/generate). Separate DB on the
+      # existing Postgres; LiteLLM runs Prisma migrations on boot.
+      - DATABASE_URL=postgres://temporal:temporal@postgresql:5432/litellm
+    depends_on:
+      postgresql:
+        condition: service_healthy
     env_file:
       - /etc/ai-hub/hub.env
     ports:
