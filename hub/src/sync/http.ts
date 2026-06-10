@@ -4,7 +4,8 @@
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import { URL } from 'node:url';
 import type { SyncStore, PushPayload, MemoryRow } from './store.js';
-import { EPOCH } from './store.js';
+import { EPOCH, ScopeViolationError } from './store.js';
+import { hashToken } from './provision.js';
 
 /** Semantic memory search: embed `q`, query Qdrant, hydrate rows. Wired in F2. */
 export type MemorySearchFn = (
@@ -52,39 +53,54 @@ async function handleRegister(store: SyncStore, body: unknown): Promise<JsonResp
   if (typeof name !== 'string' || !name.trim()) {
     return { status: 400, body: { error: 'missing name' } };
   }
-  const uid = typeof userId === 'string' && userId ? userId : await store.getDefaultUserId();
-  const result = await store.registerDevice(uid, name.trim());
-  return { status: 200, body: result };
+  if (typeof userId !== 'string' || !userId) {
+    return { status: 400, body: { error: 'missing userId' } };
+  }
+  const { provisionDevice } = await import('./provision.js');
+  const { deviceId, deviceToken } = await provisionDevice(store, { userId, name: name.trim() });
+  return { status: 200, body: { deviceId, userId, deviceToken } };
 }
 
-async function handlePush(store: SyncStore, body: unknown): Promise<JsonResponse> {
+async function handlePush(
+  store: SyncStore,
+  body: unknown,
+  enforceUserId?: string,
+): Promise<JsonResponse> {
   if (!body || typeof body !== 'object') {
     return { status: 400, body: { error: 'invalid body' } };
   }
   const payload = body as PushPayload;
-  await store.push(payload);
+  await store.push(payload, enforceUserId);
   return { status: 200, body: { ok: true } };
 }
 
-async function handlePull(store: SyncStore, url: URL): Promise<JsonResponse> {
-  const since = url.searchParams.get('since') || EPOCH;
-  const user = url.searchParams.get('user') ?? undefined;
-  const result = await store.pull(since, user);
-  return { status: 200, body: result };
+type Auth = { kind: 'admin' } | { kind: 'device'; userId: string };
+
+async function resolveAuth(
+  req: IncomingMessage,
+  store: SyncStore,
+  adminToken: string,
+): Promise<Auth | null> {
+  const tok = bearer(req);
+  if (!tok) return null;
+  if (tok === adminToken) return { kind: 'admin' };
+  const device = await store.resolveDeviceToken(hashToken(tok));
+  return device ? { kind: 'device', userId: device.userId } : null;
 }
 
 export function createSyncHttpServer(
   store: SyncStore,
-  token: string,
+  adminToken: string,
   memorySearch?: MemorySearchFn,
 ): http.Server {
-  if (!token) {
-    throw new Error('createSyncHttpServer: token is required');
+  if (!adminToken) {
+    throw new Error('createSyncHttpServer: adminToken is required');
   }
 
   return http.createServer(async (req, res) => {
     try {
-      if (bearer(req) !== token) {
+      const auth = await resolveAuth(req, store, adminToken);
+      if (!auth) {
         send(res, 401, { error: 'unauthorized' });
         return;
       }
@@ -92,7 +108,16 @@ export function createSyncHttpServer(
       const url = new URL(req.url ?? '/', 'http://localhost');
       const method = req.method ?? 'GET';
 
+      // user the request is allowed to act as: a device is locked to its own user;
+      // the admin token may target any user via ?user=.
+      const scopedUser =
+        auth.kind === 'device' ? auth.userId : (url.searchParams.get('user') ?? undefined);
+
       if (method === 'POST' && url.pathname === '/devices/register') {
+        if (auth.kind !== 'admin') {
+          send(res, 403, { error: 'admin token required' });
+          return;
+        }
         let body: unknown;
         try {
           body = await readJson(req);
@@ -113,14 +138,27 @@ export function createSyncHttpServer(
           send(res, 400, { error: 'invalid json' });
           return;
         }
-        const result = await handlePush(store, body);
-        send(res, result.status, result.body);
+        try {
+          const result = await handlePush(
+            store,
+            body,
+            auth.kind === 'device' ? auth.userId : undefined,
+          );
+          send(res, result.status, result.body);
+        } catch (err) {
+          if (err instanceof ScopeViolationError) {
+            send(res, 403, { error: 'scope violation' });
+            return;
+          }
+          throw err;
+        }
         return;
       }
 
       if (method === 'GET' && url.pathname === '/sync/pull') {
-        const result = await handlePull(store, url);
-        send(res, result.status, result.body);
+        const since = url.searchParams.get('since') || EPOCH;
+        const result = await store.pull(since, scopedUser);
+        send(res, 200, result);
         return;
       }
 
@@ -134,10 +172,9 @@ export function createSyncHttpServer(
           send(res, 400, { error: 'missing q' });
           return;
         }
-        const user = url.searchParams.get('user') ?? undefined;
         const kRaw = url.searchParams.get('k');
         const k = kRaw ? Math.max(1, Math.min(50, Number(kRaw) || 0)) : 8;
-        const memories = await memorySearch(user, q, k);
+        const memories = await memorySearch(scopedUser, q, k);
         send(res, 200, { memories });
         return;
       }
