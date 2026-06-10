@@ -49,4 +49,13 @@ CREATE TABLE IF NOT EXISTS distill_cursor (
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages (conversation_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations (user_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_memories_user ON memories (user_id, updated_at);
+
+-- F3: multi-user. profile drives the LiteLLM model allow-list; litellm_key is the
+-- per-user virtual key. Existing rows default to 'adult'.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS profile TEXT NOT NULL DEFAULT 'adult';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS litellm_key TEXT;
+
+-- F3: per-device bearer token, stored as a SHA-256 hex hash (never plaintext).
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS token_hash TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_token_hash ON devices (token_hash);
 `;
