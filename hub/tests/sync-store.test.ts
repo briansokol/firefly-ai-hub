@@ -85,4 +85,50 @@ describe.skipIf(!DB_URL)('sync store (Postgres)', () => {
     const { rows } = await store.pool.query<{ title: string }>('SELECT title FROM conversations WHERE id = $1', [conv]);
     expect(rows[0].title).toBe('new');
   });
+
+  it('creates a user with a profile and stores its litellm key', async () => {
+    const { userId: uid } = await store.createUser('Brian', 'adult');
+    expect(uid).toMatch(/^[0-9a-f-]{36}$/);
+    await store.setUserLitellmKey(uid, 'sk-test-123');
+    expect(await store.getUserLitellmKey(uid)).toBe('sk-test-123');
+
+    const { rows } = await store.pool.query<{ profile: string }>(
+      'SELECT profile FROM users WHERE id = $1',
+      [uid],
+    );
+    expect(rows[0].profile).toBe('adult');
+  });
+
+  it('creates a device with a token hash and resolves it back to the user', async () => {
+    const { userId: uid } = await store.createUser('Kid', 'kid');
+    const { deviceId } = await store.createDevice(uid, 'kid-ipad', 'hash-abc');
+    expect(deviceId).toMatch(/^[0-9a-f-]{36}$/);
+
+    const resolved = await store.resolveDeviceToken('hash-abc');
+    expect(resolved).toEqual({ deviceId, userId: uid });
+
+    expect(await store.resolveDeviceToken('nope')).toBeNull();
+  });
+
+  it('rejects a push whose rows belong to a different user (scope enforcement)', async () => {
+    const { userId: owner } = await store.createUser('Owner', 'adult');
+    const { userId: attacker } = await store.createUser('Attacker', 'adult');
+    const conv = '44444444-4444-4444-4444-444444444444';
+    const t = '2026-06-05T10:00:00.000Z';
+
+    await expect(
+      store.push(
+        { conversations: [{ id: conv, user_id: owner, title: 'x', created_at: t, updated_at: t }] },
+        attacker, // enforceUserId — must not match owner's rows
+      ),
+    ).rejects.toThrow(/scope/i);
+
+    // Same payload is fine when enforced against the real owner.
+    await expect(
+      store.push(
+        { conversations: [{ id: conv, user_id: owner, title: 'x', created_at: t, updated_at: t }] },
+        owner,
+      ),
+    ).resolves.toBeUndefined();
+  });
 });

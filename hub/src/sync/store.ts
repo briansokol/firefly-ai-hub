@@ -3,6 +3,14 @@ import { SCHEMA_SQL } from './schema.js';
 
 const { Pool, Client } = pg;
 
+/** Thrown when a device token tries to push/read rows outside its own user. */
+export class ScopeViolationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ScopeViolationError';
+  }
+}
+
 export interface ConversationRow {
   id: string;
   user_id: string;
@@ -51,7 +59,12 @@ export interface DistillMessage {
 export interface SyncStore {
   getDefaultUserId(): Promise<string>;
   registerDevice(userId: string, name: string): Promise<{ deviceId: string; userId: string }>;
-  push(payload: PushPayload): Promise<void>;
+  createUser(displayName: string, profile: string): Promise<{ userId: string }>;
+  setUserLitellmKey(userId: string, key: string): Promise<void>;
+  getUserLitellmKey(userId: string): Promise<string | null>;
+  createDevice(userId: string, name: string, tokenHash: string): Promise<{ deviceId: string }>;
+  resolveDeviceToken(tokenHash: string): Promise<{ deviceId: string; userId: string } | null>;
+  push(payload: PushPayload, enforceUserId?: string): Promise<void>;
   pull(since: string, userId?: string): Promise<PullResult>;
   // --- Memory distillation (F2) ---
   listUserIds(): Promise<string[]>;
@@ -129,10 +142,75 @@ export async function createSyncStore(connectionString: string): Promise<SyncSto
       return { deviceId: rows[0].id, userId };
     },
 
-    async push(payload) {
+    async createUser(displayName, profile) {
+      const { rows } = await pool.query<{ id: string }>(
+        'INSERT INTO users (display_name, profile) VALUES ($1, $2) RETURNING id',
+        [displayName, profile],
+      );
+      return { userId: rows[0].id };
+    },
+
+    async setUserLitellmKey(userId, key) {
+      await pool.query('UPDATE users SET litellm_key = $2 WHERE id = $1', [userId, key]);
+    },
+
+    async getUserLitellmKey(userId) {
+      const { rows } = await pool.query<{ litellm_key: string | null }>(
+        'SELECT litellm_key FROM users WHERE id = $1',
+        [userId],
+      );
+      return rows[0]?.litellm_key ?? null;
+    },
+
+    async createDevice(userId, name, tokenHash) {
+      const { rows } = await pool.query<{ id: string }>(
+        'INSERT INTO devices (user_id, name, token_hash) VALUES ($1, $2, $3) RETURNING id',
+        [userId, name, tokenHash],
+      );
+      return { deviceId: rows[0].id };
+    },
+
+    async resolveDeviceToken(tokenHash) {
+      const { rows } = await pool.query<{ id: string; user_id: string }>(
+        'SELECT id, user_id FROM devices WHERE token_hash = $1',
+        [tokenHash],
+      );
+      if (rows.length === 0) return null;
+      return { deviceId: rows[0].id, userId: rows[0].user_id };
+    },
+
+    async push(payload, enforceUserId) {
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
+
+        if (enforceUserId) {
+          for (const c of payload.conversations ?? []) {
+            if (c.user_id !== enforceUserId) {
+              throw new ScopeViolationError('conversation user_id outside device scope');
+            }
+          }
+          for (const mem of payload.memories ?? []) {
+            if (mem.user_id !== enforceUserId) {
+              throw new ScopeViolationError('memory user_id outside device scope');
+            }
+          }
+          // Messages carry no user_id; verify each referenced conversation belongs to
+          // the device's user (checking the batch first, then existing rows).
+          const batchConvOwner = new Map(
+            (payload.conversations ?? []).map((c) => [c.id, c.user_id]),
+          );
+          for (const m of payload.messages ?? []) {
+            if (batchConvOwner.get(m.conversation_id) === enforceUserId) continue;
+            const { rows } = await client.query<{ user_id: string }>(
+              'SELECT user_id FROM conversations WHERE id = $1',
+              [m.conversation_id],
+            );
+            if (rows[0]?.user_id !== enforceUserId) {
+              throw new ScopeViolationError('message conversation outside device scope');
+            }
+          }
+        }
 
         for (const c of payload.conversations ?? []) {
           await client.query(
