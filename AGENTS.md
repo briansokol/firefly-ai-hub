@@ -127,8 +127,10 @@ sudo systemctl enable --now ai-hub
 - `MEMORY_API_TOKEN` – Shared secret (X-Auth) for the web tools HTTP API on :8787 (consumed by the Open WebUI `hub_web_tools.py` filter). Required at startup.
 - `LITELLM_MASTER_KEY` – Master key for the LiteLLM gateway on :4000. Set in `/etc/ai-hub/hub.env`.
 - `ANTHROPIC_API_KEY` – Cloud key for the `frontier` fallback. Left blank for now (fallback not wired in).
-- `SYNC_API_TOKEN` – Bearer token for the sync API on :8788 (app clients). Required at startup.
+- `SYNC_API_TOKEN` – Admin/provisioning bearer token for the sync API on :8788. Gates `/devices/register` and may target any user via `?user=`. App clients authenticate with per-device tokens instead. Required at startup.
 - `SYNC_DB_URL` – Postgres URL for the sync service (default DB `firefly_sync`, created on boot). Required at startup.
+- `LITELLM_INTERNAL_URL` – Internal URL the hub + provisioning CLI use to reach the LiteLLM admin API (default: `http://litellm:4000`).
+- `LITELLM_DB_URL` – Postgres URL for LiteLLM's virtual-key store (DB `litellm`, created on hub boot). Enables per-user `/key/generate`.
 - `QDRANT_URL` – Qdrant base URL for memory vectors (default: `http://localhost:6333`)
 - `CONFIG_PATH` – Override config file location (default: `/opt/ai-hub/config.toml`)
 - `STATE_DIR` – Override state database directory (default: `~/.local/share/firefly-ai-hub`)
@@ -141,6 +143,19 @@ The old SQLite + FTS5 explicit-trigger memory (and its Discord and Open WebUI in
 - A Temporal scheduled workflow distills synced conversations into durable facts/preferences, embeds them via Ollama, and stores them in Postgres (`firefly_sync` DB) + Qdrant.
 - App clients query memories via the sync service's `/memories/search` endpoint.
 - See `PLAN-firefly-upgrade.md` and the sync service under `hub/src/sync/`.
+
+## Multi-user (F3)
+
+The sync service is multi-user. Each app device authenticates with its **own bearer token** (resolved to a single user); `SYNC_API_TOKEN` is the **admin/provisioning** secret only. Each user has a **per-user LiteLLM virtual key** scoped by profile (`adult` = `fast/code/chat-heavy/frontier`; `kid` = `fast/chat-heavy`).
+
+Provision users and devices with the CLI (run inside the compose network so it can reach `postgresql` and `litellm`):
+
+```bash
+docker compose -f deploy/docker-compose.yml exec ai-hub node dist/sync/cli.js user-add --name "Brian" --profile adult
+docker compose -f deploy/docker-compose.yml exec ai-hub node dist/sync/cli.js device-add --user <user-id> --name "macbook"
+```
+
+`user-add` prints the user's `litellmKey`; `device-add` prints the `deviceToken` (+ the user's `litellmKey`). Configure the app with the device token and LiteLLM key. In dev, use `npm run provision -- <cmd>`. See `API-CONTRACT.md` section 0 for the client-facing contract.
 
 ## Web tools HTTP API
 
