@@ -155,9 +155,12 @@ Provision users and devices with the CLI (run inside the compose network so it c
 ```bash
 docker compose -f deploy/docker-compose.yml exec ai-hub node dist/sync/cli.js user-add --name "Brian" --profile adult
 docker compose -f deploy/docker-compose.yml exec ai-hub node dist/sync/cli.js device-add --user <user-id> --name "macbook"
+# Promote/demote a user's profile (e.g. a kid who self-signed-up becoming an adult).
+# Re-scopes the user's LiteLLM key in place, so existing devices keep their key:
+docker compose -f deploy/docker-compose.yml exec ai-hub node dist/sync/cli.js user-set-profile --user <user-id> --profile adult
 ```
 
-`user-add` prints the user's `litellmKey`; `device-add` prints the `deviceToken` (+ the user's `litellmKey`). Configure the app with the device token and LiteLLM key. In dev, use `npm run provision -- <cmd>`. See `API-CONTRACT.md` section 0 for the client-facing contract.
+`user-add` prints the user's `litellmKey`; `device-add` prints the `deviceToken` (+ the user's `litellmKey`). `user-set-profile` changes a user's profile and re-scopes its LiteLLM key's model allow-list in place (the key string is unchanged, so all the user's devices immediately gain/lose access without reconfiguration). Configure the app with the device token and LiteLLM key. In dev, use `npm run provision -- <cmd>`. See `API-CONTRACT.md` section 0 for the client-facing contract.
 
 ## Web tools HTTP API
 

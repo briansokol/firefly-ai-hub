@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { generateVirtualKey, PROFILE_MODELS } from '../src/sync/litellm.js';
+import { generateVirtualKey, updateVirtualKey, PROFILE_MODELS } from '../src/sync/litellm.js';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -35,6 +35,34 @@ describe('litellm virtual keys', () => {
     await expect(
       generateVirtualKey({ baseUrl: 'http://litellm:4000', masterKey: 'bad' }, { models: ['fast'] }),
     ).rejects.toThrow(/key\/generate failed/i);
+  });
+
+  it('POSTs to /key/update to re-scope an existing key in place', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await updateVirtualKey(
+      { baseUrl: 'http://litellm:4000', masterKey: 'sk-master' },
+      { key: 'sk-existing', models: PROFILE_MODELS.adult },
+    );
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://litellm:4000/key/update');
+    expect(init.method).toBe('POST');
+    expect(init.headers.authorization).toBe('Bearer sk-master');
+    const body = JSON.parse(init.body as string);
+    expect(body.key).toBe('sk-existing');
+    expect(body.models).toEqual(['fast', 'code', 'chat-heavy', 'frontier']);
+  });
+
+  it('throws on a non-2xx /key/update response', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('nope', { status: 400 })));
+    await expect(
+      updateVirtualKey(
+        { baseUrl: 'http://litellm:4000', masterKey: 'bad' },
+        { key: 'sk-existing', models: ['fast'] },
+      ),
+    ).rejects.toThrow(/key\/update failed/i);
   });
 });
 

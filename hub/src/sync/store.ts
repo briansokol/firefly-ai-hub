@@ -63,6 +63,7 @@ export interface SyncStore {
   setUserLitellmKey(userId: string, key: string): Promise<void>;
   getUserLitellmKey(userId: string): Promise<string | null>;
   getUser(userId: string): Promise<{ profile: string; litellmKey: string | null } | null>;
+  setUserProfile(userId: string, profile: string): Promise<void>;
   createDevice(userId: string, name: string, tokenHash: string): Promise<{ deviceId: string }>;
   resolveDeviceToken(tokenHash: string): Promise<{ deviceId: string; userId: string } | null>;
   push(payload: PushPayload, enforceUserId?: string): Promise<void>;
@@ -170,6 +171,10 @@ export async function createSyncStore(connectionString: string): Promise<SyncSto
       );
       if (rows.length === 0) return null;
       return { profile: rows[0].profile, litellmKey: rows[0].litellm_key };
+    },
+
+    async setUserProfile(userId, profile) {
+      await pool.query('UPDATE users SET profile = $2 WHERE id = $1', [userId, profile]);
     },
 
     async createDevice(userId, name, tokenHash) {

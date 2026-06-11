@@ -1,6 +1,11 @@
 import { randomBytes, createHash } from 'node:crypto';
 import type { SyncStore } from './store.js';
-import { PROFILE_MODELS, generateVirtualKey, type LitellmConfig } from './litellm.js';
+import {
+  PROFILE_MODELS,
+  generateVirtualKey,
+  updateVirtualKey,
+  type LitellmConfig,
+} from './litellm.js';
 
 /** Generate a fresh device bearer token (the plaintext shown to the operator once). */
 export function mintToken(): string {
@@ -52,4 +57,39 @@ export async function provisionDevice(
   const deviceToken = mintToken();
   const { deviceId } = await store.createDevice(opts.userId, opts.name, hashToken(deviceToken));
   return { deviceId, deviceToken };
+}
+
+/**
+ * Change an existing user's profile and re-scope its LiteLLM key's model
+ * allow-list to match. The key string is preserved (updated in place), so the
+ * user's devices keep working with their stored key — they just gain/lose
+ * access to the profile's models. Affects all of the user's devices at once.
+ */
+export async function setUserProfile(
+  store: SyncStore,
+  litellm: LitellmConfig,
+  opts: { userId: string; profile: string },
+): Promise<ProvisionedUser> {
+  const models = PROFILE_MODELS[opts.profile];
+  if (!models) {
+    throw new Error(
+      `unknown profile '${opts.profile}' (expected: ${Object.keys(PROFILE_MODELS).join(', ')})`,
+    );
+  }
+  const user = await store.getUser(opts.userId);
+  if (!user) {
+    throw new Error(`unknown user '${opts.userId}'`);
+  }
+  let litellmKey = user.litellmKey;
+  if (litellmKey) {
+    await updateVirtualKey(litellm, { key: litellmKey, models });
+  } else {
+    litellmKey = await generateVirtualKey(litellm, {
+      models,
+      keyAlias: `${opts.profile}-${opts.userId}`.toLowerCase(),
+    });
+    await store.setUserLitellmKey(opts.userId, litellmKey);
+  }
+  await store.setUserProfile(opts.userId, opts.profile);
+  return { userId: opts.userId, profile: opts.profile, litellmKey };
 }

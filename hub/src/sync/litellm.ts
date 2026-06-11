@@ -36,3 +36,21 @@ export async function generateVirtualKey(cfg: LitellmConfig, spec: KeySpec): Pro
   if (!json.key) throw new Error('litellm /key/generate returned no key');
   return json.key;
 }
+
+/** Re-scope an existing LiteLLM virtual key to a new `models` allow-list, in place. */
+export async function updateVirtualKey(
+  cfg: LitellmConfig,
+  spec: { key: string; models: string[] },
+): Promise<void> {
+  const res = await fetch(`${cfg.baseUrl}/key/update`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${cfg.masterKey}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ key: spec.key, models: spec.models }),
+  });
+  if (!res.ok) {
+    throw new Error(`litellm /key/update failed: ${res.status} ${await res.text()}`);
+  }
+}
