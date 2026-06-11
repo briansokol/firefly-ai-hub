@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import type { AddressInfo } from 'node:net';
 import { createSyncHttpServer } from '../src/sync/http.js';
 import type { SyncStore } from '../src/sync/store.js';
@@ -25,10 +25,12 @@ function stubStore(): SyncStore {
     },
     // unused-by-http members:
     registerDevice: async () => ({ deviceId: 'd', userId: 'user-default' }),
-    createUser: async () => ({ userId: '' }),
+    createUser: async () => ({ userId: 'new-user-id' }),
     setUserLitellmKey: async () => {},
     getUserLitellmKey: async () => null,
-    createDevice: async () => ({ deviceId: '' }),
+    getUser: async (userId: string) =>
+      userId === 'existing-user' ? { profile: 'adult', litellmKey: 'sk-existing' } : null,
+    createDevice: async () => ({ deviceId: 'new-device-id' }),
     listUserIds: async () => [],
     getDistillCursor: async () => '',
     setDistillCursor: async () => {},
@@ -49,13 +51,18 @@ let baseUrl: string;
 let server: ReturnType<typeof createSyncHttpServer>;
 
 beforeAll(async () => {
-  server = createSyncHttpServer(stubStore(), 'admin-secret');
+  server = createSyncHttpServer(stubStore(), 'admin-secret', {
+    baseUrl: 'http://litellm.test',
+    masterKey: 'sk-master',
+  });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
   const { port } = server.address() as AddressInfo;
   baseUrl = `http://127.0.0.1:${port}`;
 });
 
 afterAll(() => server.close());
+
+afterEach(() => vi.unstubAllGlobals());
 
 const auth = (tok: string) => ({ authorization: `Bearer ${tok}` });
 
@@ -86,12 +93,58 @@ describe('sync http auth + scoping', () => {
     expect(res.status).toBe(403);
   });
 
-  it('admin-only: device token cannot register a device', async () => {
+  it('self-registers a new user with no token (mints LiteLLM key)', async () => {
+    const realFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) =>
+      typeof url === 'string' && url.startsWith('http://litellm.test')
+        ? new Response(JSON.stringify({ key: 'sk-user-key' }), { status: 200 })
+        : realFetch(url, init),
+    );
+
     const res = await fetch(`${baseUrl}/devices/register`, {
       method: 'POST',
-      headers: { ...auth('devtoken'), 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'x', userId: 'u' }),
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'macbook', displayName: 'Kiddo', profile: 'kid' }),
     });
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.userId).toBe('new-user-id');
+    expect(body.deviceId).toBe('new-device-id');
+    expect(body.litellmKey).toBe('sk-user-key');
+    expect(body.profile).toBe('kid');
+    expect(typeof body.deviceToken).toBe('string');
+    expect(body.deviceToken.length).toBeGreaterThan(0);
+  });
+
+  it('self-registers a device under an existing user (returns existing key)', async () => {
+    const res = await fetch(`${baseUrl}/devices/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'iphone', userId: 'existing-user' }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.userId).toBe('existing-user');
+    expect(body.litellmKey).toBe('sk-existing');
+    expect(body.profile).toBe('adult');
+    expect(typeof body.deviceToken).toBe('string');
+  });
+
+  it('rejects an unknown existing userId with 404', async () => {
+    const res = await fetch(`${baseUrl}/devices/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'iphone', userId: 'nope' }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it('rejects an unknown profile on signup with 400', async () => {
+    const res = await fetch(`${baseUrl}/devices/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'macbook', displayName: 'X', profile: 'wizard' }),
+    });
+    expect(res.status).toBe(400);
   });
 });

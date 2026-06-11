@@ -5,7 +5,8 @@ import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import { URL } from 'node:url';
 import type { SyncStore, PushPayload, MemoryRow } from './store.js';
 import { EPOCH, ScopeViolationError } from './store.js';
-import { hashToken } from './provision.js';
+import { hashToken, provisionUser, provisionDevice } from './provision.js';
+import { PROFILE_MODELS, type LitellmConfig } from './litellm.js';
 
 /** Semantic memory search: embed `q`, query Qdrant, hydrate rows. Wired in F2. */
 export type MemorySearchFn = (
@@ -45,20 +46,60 @@ function bearer(req: IncomingMessage): string | null {
   return m ? m[1] : null;
 }
 
-async function handleRegister(store: SyncStore, body: unknown): Promise<JsonResponse> {
+async function handleSelfRegister(
+  store: SyncStore,
+  litellm: LitellmConfig,
+  body: unknown,
+): Promise<JsonResponse> {
   if (!body || typeof body !== 'object') {
     return { status: 400, body: { error: 'invalid body' } };
   }
-  const { name, userId } = body as Record<string, unknown>;
+  const { name, userId, displayName, profile } = body as Record<string, unknown>;
   if (typeof name !== 'string' || !name.trim()) {
     return { status: 400, body: { error: 'missing name' } };
   }
-  if (typeof userId !== 'string' || !userId) {
-    return { status: 400, body: { error: 'missing userId' } };
+
+  // Existing-user path: attach a new device, return the user's existing key.
+  if (userId !== undefined) {
+    if (typeof userId !== 'string' || !userId) {
+      return { status: 400, body: { error: 'invalid userId' } };
+    }
+    const user = await store.getUser(userId);
+    if (!user) {
+      return { status: 404, body: { error: 'unknown user' } };
+    }
+    const { deviceId, deviceToken } = await provisionDevice(store, { userId, name: name.trim() });
+    return {
+      status: 200,
+      body: { deviceId, userId, deviceToken, litellmKey: user.litellmKey, profile: user.profile },
+    };
   }
-  const { provisionDevice } = await import('./provision.js');
-  const { deviceId, deviceToken } = await provisionDevice(store, { userId, name: name.trim() });
-  return { status: 200, body: { deviceId, userId, deviceToken } };
+
+  // New-user signup path: create user + mint LiteLLM key, then a device.
+  if (typeof displayName !== 'string' || !displayName.trim()) {
+    return { status: 400, body: { error: 'missing displayName' } };
+  }
+  if (typeof profile !== 'string' || !PROFILE_MODELS[profile]) {
+    return { status: 400, body: { error: 'invalid profile' } };
+  }
+  const provisioned = await provisionUser(store, litellm, {
+    displayName: displayName.trim(),
+    profile,
+  });
+  const { deviceId, deviceToken } = await provisionDevice(store, {
+    userId: provisioned.userId,
+    name: name.trim(),
+  });
+  return {
+    status: 200,
+    body: {
+      deviceId,
+      userId: provisioned.userId,
+      deviceToken,
+      litellmKey: provisioned.litellmKey,
+      profile: provisioned.profile,
+    },
+  };
 }
 
 async function handlePush(
@@ -91,6 +132,7 @@ async function resolveAuth(
 export function createSyncHttpServer(
   store: SyncStore,
   adminToken: string,
+  litellm: LitellmConfig,
   memorySearch?: MemorySearchFn,
 ): http.Server {
   if (!adminToken) {
@@ -99,25 +141,12 @@ export function createSyncHttpServer(
 
   return http.createServer(async (req, res) => {
     try {
-      const auth = await resolveAuth(req, store, adminToken);
-      if (!auth) {
-        send(res, 401, { error: 'unauthorized' });
-        return;
-      }
-
       const url = new URL(req.url ?? '/', 'http://localhost');
       const method = req.method ?? 'GET';
 
-      // user the request is allowed to act as: a device is locked to its own user;
-      // the admin token may target any user via ?user=.
-      const scopedUser =
-        auth.kind === 'device' ? auth.userId : (url.searchParams.get('user') ?? undefined);
-
+      // Open self-registration: no auth on the tailnet. A device provisions its
+      // own token + LiteLLM key (new user) or attaches to an existing user.
       if (method === 'POST' && url.pathname === '/devices/register') {
-        if (auth.kind !== 'admin') {
-          send(res, 403, { error: 'admin token required' });
-          return;
-        }
         let body: unknown;
         try {
           body = await readJson(req);
@@ -125,10 +154,21 @@ export function createSyncHttpServer(
           send(res, 400, { error: 'invalid json' });
           return;
         }
-        const result = await handleRegister(store, body);
+        const result = await handleSelfRegister(store, litellm, body);
         send(res, result.status, result.body);
         return;
       }
+
+      const auth = await resolveAuth(req, store, adminToken);
+      if (!auth) {
+        send(res, 401, { error: 'unauthorized' });
+        return;
+      }
+
+      // user the request is allowed to act as: a device is locked to its own user;
+      // the admin token may target any user via ?user=.
+      const scopedUser =
+        auth.kind === 'device' ? auth.userId : (url.searchParams.get('user') ?? undefined);
 
       if (method === 'POST' && url.pathname === '/sync/push') {
         let body: unknown;
