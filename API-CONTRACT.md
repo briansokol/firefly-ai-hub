@@ -4,7 +4,8 @@
 > APIs **as they are actually implemented today** on Firefly, not the aspirational plan.
 > Where this doc and `PLAN-firefly-upgrade.md` disagree, this doc wins (it was written
 > from the running code). Phases F0–F3 are implemented: the system is **multi-user**,
-> with per-device sync tokens and per-user LiteLLM virtual keys (see section 0).
+> with per-device sync tokens and per-user LiteLLM virtual keys (see section 0). A
+> post-F3 change made `POST /devices/register` open self-registration — see §0.1.
 
 ---
 
@@ -15,12 +16,37 @@ The system is now **multi-user**. Summary of endpoint/auth changes:
 | Endpoint | Status | Change |
 |---|---|---|
 | All sync routes | **CHANGED auth** | Was one shared `SYNC_API_TOKEN`. Now each device sends its **own device token** (issued at provisioning). The token determines the user. |
-| `POST /devices/register` | **CHANGED** | Now **open self-registration** (no token required; the tailnet is the trust boundary). Send `{ name, userId }` to add a device to an existing user, or `{ name, displayName }` to create a new user. Open signups are always `kid`-profile; creating an `adult` user requires the admin token (`SYNC_API_TOKEN`). Response includes `deviceToken`, `userId`, `litellmKey`, and `profile`. The admin CLI still works for operator-driven provisioning. |
+| `POST /devices/register` | **CHANGED** | Became **admin-only** (`SYNC_API_TOKEN`, not a device token), with `userId` **required**; response gained `deviceToken`. _Superseded after F3 — registration is now open self-registration; see §0.1._ |
 | `GET /sync/pull` | **CHANGED** | The `?user=` param is **ignored** for device tokens (a device always returns its own user's rows). Only the admin token may target another user via `?user=`. |
 | `GET /memories/search` | **CHANGED** | Same `?user=` change as pull — ignored for device tokens. |
 | `POST /sync/push` | **CHANGED** | Rows whose `user_id` is not the device's user are rejected with `403 {"error":"scope violation"}`. |
 | LiteLLM `:4000` | **CHANGED** | The app uses a **per-user virtual key** (from provisioning), not the master key. Keys are model-scoped: `adult` = `fast/code/chat-heavy/frontier`; `kid` = `fast/chat-heavy`. Requesting a disallowed model returns a 4xx. |
-| `403` status | **NEW** | Returned for scope violations and for using a device token on an admin-only route. |
+| `403` status | **NEW** | Returned for scope violations (in F3, also for using a device token on the then-admin-only register route; post-F3 that route is open — see §0.1). |
+
+---
+
+## 0.1 What changed after F3 (open self-registration)
+
+This is the **current** behavior and supersedes the F3 `POST /devices/register` row
+above. If you built against the admin-only F3 register endpoint, here is the delta:
+
+| Area | Was (F3) | Now (current) |
+|---|---|---|
+| `POST /devices/register` auth | **Admin-only** — required `Authorization: Bearer <SYNC_API_TOKEN>`. | **Open** — no token required (the tailnet is the trust boundary). |
+| Register body | `{ name, userId }` only (attach to an existing user). | Two modes: `{ name, userId }` (existing user) **or** `{ name, displayName }` (create a new user). |
+| Register response | `{ deviceId, userId, deviceToken }`. | Adds `litellmKey` and `profile`: `{ deviceId, userId, deviceToken, litellmKey, profile }`. A self-registering device now obtains its LiteLLM key from this call instead of out-of-band. |
+| New-user profile | n/a (users were created by the operator CLI). | New signups are **always `kid`** by default. Creating an `adult` user via register requires the admin token (`403` otherwise). |
+| Profile lifetime | Fixed at user creation. | **Per-user attribute** an operator can change later (kid↔adult) with the `user-set-profile` CLI; it re-scopes the user's existing LiteLLM key **in place** (same key string), so the client's allowed model set can widen/narrow between sessions without the key changing. |
+
+**Client impact:**
+- Onboarding no longer needs an out-of-band admin step: a fresh device can `POST
+  /devices/register` with `{ name, displayName }` and receive its `deviceToken` +
+  `litellmKey` directly. It will be a `kid`-profile user; an operator promotes it to
+  `adult` server-side if needed.
+- Because a user's profile (and therefore its key's model allow-list) can change
+  server-side without the key string changing, don't hard-cache the model list
+  forever — re-fetch `GET /v1/models` periodically (and treat a `4xx` for a
+  previously-allowed model as "your profile changed," not a bug).
 
 ---
 
@@ -33,7 +59,7 @@ security boundary. Use the host's tailnet hostname/IP in place of `firefly` belo
 | Service | Port | Auth | Protocol |
 |---|---|---|---|
 | LiteLLM gateway | `4000` | `Authorization: Bearer <per-user virtual key>` | OpenAI-compatible REST |
-| Sync service | `8788` | `Authorization: Bearer <device token>` (admin token for provisioning only) | JSON REST |
+| Sync service | `8788` | `Authorization: Bearer <device token>`; `/devices/register` needs no token (admin token only to create an `adult` user or to target another user via `?user=`) | JSON REST |
 
 There are two other ports on the box (`11434` Ollama, `6333` Qdrant, `8787` web
 tools). **The client must not talk to those directly.** Inference goes through
@@ -66,7 +92,7 @@ across models. Just send the logical name you want.
 
 ```
 POST http://firefly:4000/v1/chat/completions
-Authorization: Bearer <LITELLM_MASTER_KEY>
+Authorization: Bearer <per-user virtual key>
 Content-Type: application/json
 
 {
@@ -99,9 +125,11 @@ Delta-sync API backed by Postgres. Every request requires the bearer token.
 
 - **Auth:** `Authorization: Bearer <device token>` on every route. Each device has
   its own token, issued at provisioning; the token alone determines the user. A
-  missing or unknown token returns `401 {"error":"unauthorized"}`. The admin token
-  (`SYNC_API_TOKEN`) is operator/provisioning-only: it gates `/devices/register` and
-  may target any user via `?user=`. App clients never use the admin token.
+  missing or unknown token returns `401 {"error":"unauthorized"}`. `/devices/register`
+  is the one exception — it needs **no** token (see §3.2). The admin token
+  (`SYNC_API_TOKEN`) is operator/provisioning-only: it may target any user via
+  `?user=` and is required to create an `adult` user via register. App clients never
+  use the admin token.
 - **Content type:** request and response bodies are `application/json`.
 - **IDs are client-generated** UUIDs (UUIDv7 recommended so they sort by time).
   The server upserts by these IDs; it does not mint conversation/message IDs.
@@ -288,10 +316,10 @@ All errors are JSON `{"error": "<message>"}` with these statuses:
 
 | Status | When |
 |---|---|
-| `400` | malformed JSON, missing required field (`name`, `q`) |
+| `400` | malformed JSON, missing/invalid required field (`name`, `displayName`, `q`, `userId`), or unknown `profile` on register |
 | `401` | missing/invalid bearer token |
-| `403` | scope violation (pushing another user's rows) or using a device token on an admin-only route |
-| `404` | unknown route/method |
+| `403` | scope violation (pushing another user's rows), or creating a non-`kid` user via register without the admin token |
+| `404` | unknown route/method, or `/devices/register` with a `userId` that does not exist (`{"error":"unknown user"}`) |
 | `501` | `/memories/search` called but memory search not wired on server |
 | `500` | server-side failure |
 
@@ -316,8 +344,10 @@ Treat `400`/`401`/`403` as client bugs to surface, not retry.
 POST   http://firefly:4000/v1/chat/completions     Bearer <per-user virtual key>
 GET    http://firefly:4000/v1/models               Bearer <per-user virtual key>
 
-# Sync (Bearer = the device token; admin token only for /devices/register)
-POST   http://firefly:8788/devices/register        (admin) { name, userId } -> { deviceId, userId, deviceToken }
+# Sync (Bearer = the device token; /devices/register needs no token)
+POST   http://firefly:8788/devices/register        { name, displayName }  -> { deviceId, userId, deviceToken, litellmKey, profile }   # new kid user
+POST   http://firefly:8788/devices/register        { name, userId }       -> { deviceId, userId, deviceToken, litellmKey, profile }   # device for existing user
+#      (adult user: add  Authorization: Bearer <SYNC_API_TOKEN>  and  "profile":"adult")
 POST   http://firefly:8788/sync/push               { conversations?, messages?, memories? } -> { ok: true }
 GET    http://firefly:8788/sync/pull?since=         -> { conversations, messages, memories, cursor }
 GET    http://firefly:8788/memories/search?q=&k=8   -> { memories }
