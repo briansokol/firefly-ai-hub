@@ -50,6 +50,7 @@ async function handleSelfRegister(
   store: SyncStore,
   litellm: LitellmConfig,
   body: unknown,
+  isAdmin: boolean,
 ): Promise<JsonResponse> {
   if (!body || typeof body !== 'object') {
     return { status: 400, body: { error: 'invalid body' } };
@@ -79,12 +80,21 @@ async function handleSelfRegister(
   if (typeof displayName !== 'string' || !displayName.trim()) {
     return { status: 400, body: { error: 'missing displayName' } };
   }
-  if (typeof profile !== 'string' || !PROFILE_MODELS[profile]) {
-    return { status: 400, body: { error: 'invalid profile' } };
+  // Profile is a user attribute. Open signups default to (and may only be) 'kid';
+  // creating a non-kid user requires the admin token.
+  let requestedProfile = 'kid';
+  if (profile !== undefined) {
+    if (typeof profile !== 'string' || !PROFILE_MODELS[profile]) {
+      return { status: 400, body: { error: 'invalid profile' } };
+    }
+    requestedProfile = profile;
+  }
+  if (requestedProfile !== 'kid' && !isAdmin) {
+    return { status: 403, body: { error: 'admin token required for non-kid profile' } };
   }
   const provisioned = await provisionUser(store, litellm, {
     displayName: displayName.trim(),
-    profile,
+    profile: requestedProfile,
   });
   const { deviceId, deviceToken } = await provisionDevice(store, {
     userId: provisioned.userId,
@@ -154,7 +164,12 @@ export function createSyncHttpServer(
           send(res, 400, { error: 'invalid json' });
           return;
         }
-        const result = await handleSelfRegister(store, litellm, body);
+        const result = await handleSelfRegister(
+          store,
+          litellm,
+          body,
+          bearer(req) === adminToken,
+        );
         send(res, result.status, result.body);
         return;
       }

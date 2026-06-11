@@ -116,6 +116,52 @@ describe('sync http auth + scoping', () => {
     expect(body.deviceToken.length).toBeGreaterThan(0);
   });
 
+  it('open signup with no profile defaults to kid', async () => {
+    const realFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) =>
+      typeof url === 'string' && url.startsWith('http://litellm.test')
+        ? new Response(JSON.stringify({ key: 'sk-user-key' }), { status: 200 })
+        : realFetch(url, init),
+    );
+
+    const res = await fetch(`${baseUrl}/devices/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'macbook', displayName: 'Kiddo' }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.profile).toBe('kid');
+  });
+
+  it('open signup requesting an adult profile is rejected with 403', async () => {
+    const res = await fetch(`${baseUrl}/devices/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'macbook', displayName: 'Grown Up', profile: 'adult' }),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('the admin token can create an adult user', async () => {
+    const realFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) =>
+      typeof url === 'string' && url.startsWith('http://litellm.test')
+        ? new Response(JSON.stringify({ key: 'sk-adult-key' }), { status: 200 })
+        : realFetch(url, init),
+    );
+
+    const res = await fetch(`${baseUrl}/devices/register`, {
+      method: 'POST',
+      headers: { ...auth('admin-secret'), 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'macbook', displayName: 'Grown Up', profile: 'adult' }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.profile).toBe('adult');
+    expect(body.litellmKey).toBe('sk-adult-key');
+  });
+
   it('self-registers a device under an existing user (returns existing key)', async () => {
     const res = await fetch(`${baseUrl}/devices/register`, {
       method: 'POST',

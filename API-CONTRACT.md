@@ -15,7 +15,7 @@ The system is now **multi-user**. Summary of endpoint/auth changes:
 | Endpoint | Status | Change |
 |---|---|---|
 | All sync routes | **CHANGED auth** | Was one shared `SYNC_API_TOKEN`. Now each device sends its **own device token** (issued at provisioning). The token determines the user. |
-| `POST /devices/register` | **CHANGED** | Now **open self-registration** (no token required; the tailnet is the trust boundary). Send `{ name, userId }` to add a device to an existing user, or `{ name, displayName, profile }` to create a new user and mint its LiteLLM key. Response includes `deviceToken`, `userId`, `litellmKey`, and `profile`. The admin CLI still works for operator-driven provisioning. |
+| `POST /devices/register` | **CHANGED** | Now **open self-registration** (no token required; the tailnet is the trust boundary). Send `{ name, userId }` to add a device to an existing user, or `{ name, displayName }` to create a new user. Open signups are always `kid`-profile; creating an `adult` user requires the admin token (`SYNC_API_TOKEN`). Response includes `deviceToken`, `userId`, `litellmKey`, and `profile`. The admin CLI still works for operator-driven provisioning. |
 | `GET /sync/pull` | **CHANGED** | The `?user=` param is **ignored** for device tokens (a device always returns its own user's rows). Only the admin token may target another user via `?user=`. |
 | `GET /memories/search` | **CHANGED** | Same `?user=` change as pull — ignored for device tokens. |
 | `POST /sync/push` | **CHANGED** | Rows whose `user_id` is not the device's user are rejected with `403 {"error":"scope violation"}`. |
@@ -154,14 +154,17 @@ There are two modes, selected by the body:
 **New user (self-signup)** — creates a user, mints its per-user LiteLLM key, and
 registers this device:
 ```json
-{ "name": "macbook", "displayName": "Kiddo", "profile": "kid" }
+{ "name": "macbook", "displayName": "Kiddo" }
 ```
 - `name` (required): device label.
 - `displayName` (required): the new user's display name.
-- `profile` (required): `"adult"` or `"kid"`. Sets the LiteLLM model allow-list
-  (`adult` = `fast/code/chat-heavy/frontier`; `kid` = `fast/chat-heavy`). An unknown
-  profile returns `400 {"error":"invalid profile"}`. Note: the device chooses its
-  own profile, so this is a UX/default boundary, not an enforced restriction.
+- `profile` (optional): the **user's** profile, which sets the LiteLLM model
+  allow-list (`adult` = `fast/code/chat-heavy/frontier`; `kid` = `fast/chat-heavy`)
+  for that user and all of its devices. **Open signups are always `kid`** — the field
+  defaults to `kid` and any other value requires the admin token. Creating an `adult`
+  user therefore needs `Authorization: Bearer <SYNC_API_TOKEN>`; without it, a non-kid
+  profile returns `403 {"error":"admin token required for non-kid profile"}`. An
+  unknown profile returns `400 {"error":"invalid profile"}`.
 
 **Existing user** — adds a device to a known user and returns that user's existing key:
 ```json

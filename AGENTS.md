@@ -148,7 +148,7 @@ The old SQLite + FTS5 explicit-trigger memory (and its Discord and Open WebUI in
 
 The sync service is multi-user. Each app device authenticates with its **own bearer token** (resolved to a single user); `SYNC_API_TOKEN` is the **admin/provisioning** secret only. Each user has a **per-user LiteLLM virtual key** scoped by profile (`adult` = `fast/code/chat-heavy/frontier`; `kid` = `fast/chat-heavy`).
 
-Devices can **self-register** on the tailnet via `POST /devices/register` (no token): send `{ name, displayName, profile }` to create a new user (mints its LiteLLM key) or `{ name, userId }` to add a device to an existing user. The CLI below remains for operator-driven provisioning.
+Profile is a **user** attribute (not per-device): a user's profile sets its LiteLLM key's model allow-list, and all of that user's devices inherit it. Devices can **self-register** on the tailnet via `POST /devices/register` (no token): send `{ name, displayName }` to create a new user (mints its LiteLLM key) or `{ name, userId }` to add a device to an existing user. Open signups are always `kid`; creating an `adult` user requires the admin token (`SYNC_API_TOKEN`). The CLI below remains for operator-driven provisioning.
 
 Provision users and devices with the CLI (run inside the compose network so it can reach `postgresql` and `litellm`):
 
