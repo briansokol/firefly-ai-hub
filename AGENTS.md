@@ -127,7 +127,7 @@ sudo systemctl enable --now ai-hub
 - `MEMORY_API_TOKEN` – Shared secret (X-Auth) for the web tools HTTP API on :8787 (consumed by the Open WebUI `hub_web_tools.py` filter). Required at startup.
 - `LITELLM_MASTER_KEY` – Master key for the LiteLLM gateway on :4000. Set in `/etc/ai-hub/hub.env`.
 - `ANTHROPIC_API_KEY` – Cloud key for the `frontier` fallback. Left blank for now (fallback not wired in).
-- `SYNC_API_TOKEN` – Admin/provisioning bearer token for the sync API on :8788. Gates `/devices/register` and may target any user via `?user=`. App clients authenticate with per-device tokens instead. Required at startup.
+- `SYNC_API_TOKEN` – Admin/provisioning bearer token for the sync API on :8788. May target any user via `?user=` on pull/search. `/devices/register` is now open self-registration (no token). App clients authenticate with per-device tokens. Required at startup.
 - `SYNC_DB_URL` – Postgres URL for the sync service (default DB `firefly_sync`, created on boot). Required at startup.
 - `LITELLM_INTERNAL_URL` – Internal URL the hub + provisioning CLI use to reach the LiteLLM admin API (default: `http://litellm:4000`).
 - `LITELLM_DB_URL` – Postgres URL for LiteLLM's virtual-key store (DB `litellm`, created on hub boot). Enables per-user `/key/generate`.
@@ -147,6 +147,8 @@ The old SQLite + FTS5 explicit-trigger memory (and its Discord and Open WebUI in
 ## Multi-user (F3)
 
 The sync service is multi-user. Each app device authenticates with its **own bearer token** (resolved to a single user); `SYNC_API_TOKEN` is the **admin/provisioning** secret only. Each user has a **per-user LiteLLM virtual key** scoped by profile (`adult` = `fast/code/chat-heavy/frontier`; `kid` = `fast/chat-heavy`).
+
+Devices can **self-register** on the tailnet via `POST /devices/register` (no token): send `{ name, displayName, profile }` to create a new user (mints its LiteLLM key) or `{ name, userId }` to add a device to an existing user. The CLI below remains for operator-driven provisioning.
 
 Provision users and devices with the CLI (run inside the compose network so it can reach `postgresql` and `litellm`):
 

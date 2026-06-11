@@ -15,7 +15,7 @@ The system is now **multi-user**. Summary of endpoint/auth changes:
 | Endpoint | Status | Change |
 |---|---|---|
 | All sync routes | **CHANGED auth** | Was one shared `SYNC_API_TOKEN`. Now each device sends its **own device token** (issued at provisioning). The token determines the user. |
-| `POST /devices/register` | **CHANGED** | Now **admin-only** (requires `SYNC_API_TOKEN`, not a device token). `userId` is now **required**. Response now includes `deviceToken`. Normal onboarding is the server CLI, not this endpoint. |
+| `POST /devices/register` | **CHANGED** | Now **open self-registration** (no token required; the tailnet is the trust boundary). Send `{ name, userId }` to add a device to an existing user, or `{ name, displayName, profile }` to create a new user and mint its LiteLLM key. Response includes `deviceToken`, `userId`, `litellmKey`, and `profile`. The admin CLI still works for operator-driven provisioning. |
 | `GET /sync/pull` | **CHANGED** | The `?user=` param is **ignored** for device tokens (a device always returns its own user's rows). Only the admin token may target another user via `?user=`. |
 | `GET /memories/search` | **CHANGED** | Same `?user=` change as pull — ignored for device tokens. |
 | `POST /sync/push` | **CHANGED** | Rows whose `user_id` is not the device's user are rejected with `403 {"error":"scope violation"}`. |
@@ -146,29 +146,42 @@ These are the exact field names and nullability the API uses on the wire.
 }
 ```
 
-### 3.2 `POST /devices/register` (admin-only)
+### 3.2 `POST /devices/register` (open self-registration)
 
-**The normal onboarding path is the server-side provisioning CLI**, not this
-endpoint. The operator runs `user-add` (creates the user + its LiteLLM virtual key)
-then `device-add` (mints the device token), and configures the app with the returned
-**device token** and **LiteLLM key** out-of-band. This endpoint exists for
-programmatic provisioning and requires the **admin token** (`SYNC_API_TOKEN`).
+A device provisions itself with **no token** — the tailnet is the trust boundary.
+There are two modes, selected by the body:
 
-Request (admin token):
+**New user (self-signup)** — creates a user, mints its per-user LiteLLM key, and
+registers this device:
 ```json
-{ "name": "framework", "userId": "existing-user-uuid" }
+{ "name": "macbook", "displayName": "Kiddo", "profile": "kid" }
 ```
-- `name` (required): device label, e.g. `"framework"`, `"macbook"`, `"iphone"`.
-- `userId` (**required**): the user this device belongs to.
+- `name` (required): device label.
+- `displayName` (required): the new user's display name.
+- `profile` (required): `"adult"` or `"kid"`. Sets the LiteLLM model allow-list
+  (`adult` = `fast/code/chat-heavy/frontier`; `kid` = `fast/chat-heavy`). An unknown
+  profile returns `400 {"error":"invalid profile"}`. Note: the device chooses its
+  own profile, so this is a UX/default boundary, not an enforced restriction.
 
-Response `200`:
+**Existing user** — adds a device to a known user and returns that user's existing key:
 ```json
-{ "deviceId": "uuid", "userId": "uuid", "deviceToken": "<bearer token, shown once>" }
+{ "name": "iphone", "userId": "existing-user-uuid" }
 ```
-Persist `deviceToken` (it is the device's bearer token going forward) and stamp
-`userId` onto every conversation/memory you create. Errors: `400
-{"error":"missing name"}` / `{"error":"missing userId"}`; `403` if called without the
-admin token.
+- `name` (required): device label.
+- `userId` (required): the user to attach to. Unknown id returns
+  `404 {"error":"unknown user"}`.
+
+Response `200` (both modes):
+```json
+{ "deviceId": "uuid", "userId": "uuid", "deviceToken": "<bearer, shown once>", "litellmKey": "<per-user LiteLLM key>", "profile": "kid" }
+```
+Persist `deviceToken` (the device's bearer token for all sync routes) and `litellmKey`
+(the API key for `:4000`), and stamp `userId` onto every conversation/memory you create.
+Errors: `400 {"error":"missing name"}` / `{"error":"missing displayName"}` /
+`{"error":"invalid profile"}` / `{"error":"invalid userId"}`; `404 {"error":"unknown user"}`.
+
+The operator CLI (`user-add` / `device-add`) remains available for server-side
+provisioning; the admin token (`SYNC_API_TOKEN`) is no longer required to register.
 
 ### 3.3 `POST /sync/push`
 
