@@ -10,6 +10,7 @@ import { createConversationStore } from './discord/conversation.js';
 import { createWebToolsHttpServer } from './web/http.js';
 import { createSyncStore, ensureDatabaseExists } from './sync/store.js';
 import { createSyncHttpServer } from './sync/http.js';
+import type { LitellmConfig } from './sync/litellm.js';
 import { search as qdrantSearch } from './sync/qdrant.js';
 import { embed } from './ollama.js';
 import { MEMORY_COLLECTION, EMBED_MODEL } from './temporal/activities.js';
@@ -77,7 +78,11 @@ async function main() {
     const byId = new Map(rows.map((r) => [r.id, r]));
     return hits.map((h) => byId.get(h.id)).filter((r): r is NonNullable<typeof r> => Boolean(r));
   };
-  const syncHttpServer = createSyncHttpServer(syncStore, syncApiToken, memorySearch);
+  const litellmConfig: LitellmConfig = {
+    baseUrl: process.env.LITELLM_INTERNAL_URL ?? 'http://litellm:4000',
+    masterKey: process.env.LITELLM_MASTER_KEY ?? '',
+  };
+  const syncHttpServer = createSyncHttpServer(syncStore, syncApiToken, litellmConfig, memorySearch);
   await new Promise<void>((resolve, reject) => {
     syncHttpServer.once('error', reject);
     syncHttpServer.listen(SYNC_HTTP_PORT, '0.0.0.0', () => {
