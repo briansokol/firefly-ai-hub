@@ -58,4 +58,9 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS litellm_key TEXT;
 -- F3: per-device bearer token, stored as a SHA-256 hex hash (never plaintext).
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS token_hash TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_token_hash ON devices (token_hash);
+
+-- Conversation soft-delete tombstone. NULL = active; non-null = the deletion time.
+-- A delete is a normal LWW update that sets deleted_at and bumps updated_at, so it
+-- propagates through /sync/push + /sync/pull like any other conversation change.
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 `;
