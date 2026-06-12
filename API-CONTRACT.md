@@ -50,6 +50,27 @@ above. If you built against the admin-only F3 register endpoint, here is the del
 
 ---
 
+## 0.2 What changed after F3 (conversation rename + delete)
+
+Renaming a conversation was always possible (it is just an LWW `title` write); this
+makes it explicit and adds conversation **deletion**. Both ride the existing
+`POST /sync/push` + `GET /sync/pull` — no new endpoints.
+
+| Area | Was | Now (current) |
+|---|---|---|
+| Conversation shape | `{ id, user_id, title, created_at, updated_at }`. | Adds `deleted_at: string \| null` — a soft-delete tombstone. |
+| Deleting a conversation | Not supported (a hard delete never reaches other devices). | Set `deleted_at` + bump `updated_at` and push; the tombstone propagates via pull under LWW (see §3.7). |
+| Renaming a conversation | Worked but undocumented. | Documented: set `title` + bump `updated_at` and push (§3.7). |
+| Memory distillation | Distilled all synced conversations. | Skips soft-deleted conversations; memories distilled before a delete are retained. |
+
+**Client impact:**
+- Pull responses now include `deleted_at` on every conversation row (`null` for
+  active ones). Merge a non-null `deleted_at` as "hide this conversation locally."
+- To delete, don't drop the row — push it with `deleted_at` set so other devices
+  converge.
+
+---
+
 ## 1. Topology
 
 All services run on the host `firefly` and are reachable **only over the Tailscale
@@ -151,7 +172,8 @@ These are the exact field names and nullability the API uses on the wire.
   user_id: string,       // UUID from /devices/register
   title: string | null,
   created_at: string,    // ISO-8601 UTC
-  updated_at: string     // ISO-8601 UTC; drives LWW + the sync cursor
+  updated_at: string,    // ISO-8601 UTC; drives LWW + the sync cursor
+  deleted_at: string | null  // ISO-8601 UTC tombstone; non-null = deleted
 }
 
 // message — APPEND-ONLY (never edited or deleted)
@@ -236,6 +258,13 @@ Response `200`: `{ "ok": true }`. The whole push is one transaction.
 - **conversations** and **memories** are **last-write-wins by `updated_at`**. An
   incoming row only overwrites the stored one if its `updated_at` is `>=` the
   stored value. Always bump `updated_at` when you change a title, etc.
+- **deleting a conversation** is a normal LWW conversation write: set `deleted_at`
+  to the current ISO timestamp and bump `updated_at`, then push it. The tombstone
+  propagates to your other devices on their next pull; merge it by marking the
+  conversation deleted locally (and dropping its messages from your UI). A stale
+  write with an older `updated_at` will not resurrect a deleted conversation.
+  Messages remain append-only and are not deleted server-side; memories already
+  distilled from a deleted conversation are retained.
 
 Because pushes are idempotent, the client can safely re-send its outbound queue
 after a crash or network failure without deduping first.
@@ -307,6 +336,19 @@ Memories are produced by a scheduled server-side workflow that distills recent
 conversations into durable facts/preferences. The client does **not** create or
 embed memories; it only reads them via this endpoint and receives them via
 `/sync/pull`.
+
+### 3.7 Renaming and deleting conversations
+
+Both are ordinary conversation writes pushed through `POST /sync/push` — there is no
+separate endpoint.
+
+- **Rename:** set the new `title`, bump `updated_at`, push the conversation row. The
+  new title syncs to your other devices on their next pull (LWW by `updated_at`).
+- **Delete:** set `deleted_at` to the current ISO timestamp, bump `updated_at`, push
+  the conversation row. Treat it as a tombstone — keep the row, do not try to hard
+  delete. Other devices receive the tombstone via `/sync/pull` and should hide the
+  conversation. Memories already distilled from it stay; if it is deleted before the
+  distillation workflow runs, its messages are skipped and never become memories.
 
 ---
 
