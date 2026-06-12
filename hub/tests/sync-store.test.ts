@@ -86,6 +86,62 @@ describe.skipIf(!DB_URL)('sync store (Postgres)', () => {
     expect(rows[0].title).toBe('new');
   });
 
+  it('soft-deletes a conversation and syncs the tombstone under LWW', async () => {
+    const conv = '55555555-5555-5555-5555-555555555555';
+    const t1 = '2026-06-06T10:00:00.000Z';
+    const t2 = '2026-06-06T10:00:05.000Z';
+
+    // Create, then delete by setting deleted_at and bumping updated_at.
+    await store.push({ conversations: [{ id: conv, user_id: userId, title: 'doomed', created_at: t1, updated_at: t1 }] });
+    await store.push({ conversations: [{ id: conv, user_id: userId, title: 'doomed', created_at: t1, updated_at: t2, deleted_at: t2 }] });
+
+    // A client whose cursor predates the delete sees the tombstone on pull.
+    const delta = await store.pull(t1, userId);
+    expect(delta.conversations.find((c) => c.id === conv)?.deleted_at).toBe(t2);
+
+    // A stale un-delete (older updated_at) must NOT clobber the tombstone.
+    await store.push({ conversations: [{ id: conv, user_id: userId, title: 'doomed', created_at: t1, updated_at: t1, deleted_at: null }] });
+    const { rows } = await store.pool.query<{ deleted_at: string | null }>(
+      'SELECT deleted_at FROM conversations WHERE id = $1',
+      [conv],
+    );
+    expect(rows[0].deleted_at).not.toBeNull();
+  });
+
+  it('getMessagesSince excludes messages from soft-deleted conversations', async () => {
+    const live = '66666666-6666-6666-6666-666666666666';
+    const dead = '77777777-7777-7777-7777-777777777777';
+    const t = '2026-06-07T10:00:00.000Z';
+
+    await store.push({
+      conversations: [
+        { id: live, user_id: userId, title: 'live', created_at: t, updated_at: t },
+        { id: dead, user_id: userId, title: 'dead', created_at: t, updated_at: t, deleted_at: t },
+      ],
+      messages: [
+        { id: '6666aaa1-0000-0000-0000-000000000001', conversation_id: live, role: 'user', content: 'keep me', model: null, created_at: t },
+        { id: '7777aaa1-0000-0000-0000-000000000001', conversation_id: dead, role: 'user', content: 'skip me', model: null, created_at: t },
+      ],
+    });
+
+    const contents = (await store.getMessagesSince(userId, EPOCH)).map((m) => m.content);
+    expect(contents).toContain('keep me');
+    expect(contents).not.toContain('skip me');
+  });
+
+  it('a renamed conversation syncs its new title to other clients via pull', async () => {
+    const conv = '88888888-8888-8888-8888-888888888888';
+    const t1 = '2026-06-08T10:00:00.000Z';
+    const t2 = '2026-06-08T10:00:05.000Z';
+
+    await store.push({ conversations: [{ id: conv, user_id: userId, title: 'first name', created_at: t1, updated_at: t1 }] });
+    await store.push({ conversations: [{ id: conv, user_id: userId, title: 'renamed', created_at: t1, updated_at: t2 }] });
+
+    // A client whose cursor predates the rename pulls the new title.
+    const delta = await store.pull(t1, userId);
+    expect(delta.conversations.find((c) => c.id === conv)?.title).toBe('renamed');
+  });
+
   it('creates a user with a profile and stores its litellm key', async () => {
     const { userId: uid } = await store.createUser('Brian', 'adult');
     expect(uid).toMatch(/^[0-9a-f-]{36}$/);

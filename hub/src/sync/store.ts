@@ -17,6 +17,7 @@ export interface ConversationRow {
   title: string | null;
   created_at: string;
   updated_at: string;
+  deleted_at?: string | null;
 }
 
 export interface MessageRow {
@@ -229,13 +230,14 @@ export async function createSyncStore(connectionString: string): Promise<SyncSto
 
         for (const c of payload.conversations ?? []) {
           await client.query(
-            `INSERT INTO conversations (id, user_id, title, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5)
+            `INSERT INTO conversations (id, user_id, title, created_at, updated_at, deleted_at)
+             VALUES ($1, $2, $3, $4, $5, $6)
              ON CONFLICT (id) DO UPDATE SET
                title = EXCLUDED.title,
-               updated_at = EXCLUDED.updated_at
+               updated_at = EXCLUDED.updated_at,
+               deleted_at = EXCLUDED.deleted_at
              WHERE EXCLUDED.updated_at >= conversations.updated_at`,
-            [c.id, c.user_id, c.title ?? null, c.created_at, c.updated_at],
+            [c.id, c.user_id, c.title ?? null, c.created_at, c.updated_at, c.deleted_at ?? null],
           );
         }
 
@@ -278,7 +280,8 @@ export async function createSyncStore(connectionString: string): Promise<SyncSto
         await pool.query<ConversationRow>(
           `SELECT id, user_id, title,
                   to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at,
-                  to_char(updated_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS updated_at
+                  to_char(updated_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS updated_at,
+                  to_char(deleted_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS deleted_at
            FROM conversations
            WHERE user_id = $1 AND updated_at > $2
            ORDER BY updated_at ASC`,
@@ -347,7 +350,7 @@ export async function createSyncStore(connectionString: string): Promise<SyncSto
                 to_char(m.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at
          FROM messages m
          JOIN conversations c ON c.id = m.conversation_id
-         WHERE c.user_id = $1 AND m.created_at > $2
+         WHERE c.user_id = $1 AND m.created_at > $2 AND c.deleted_at IS NULL
          ORDER BY m.created_at ASC`,
         [userId, since],
       );
