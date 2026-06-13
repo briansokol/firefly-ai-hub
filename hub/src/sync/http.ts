@@ -125,7 +125,10 @@ async function handlePush(
   return { status: 200, body: { ok: true } };
 }
 
-type Auth = { kind: 'admin' } | { kind: 'device'; userId: string };
+type Auth =
+  | { kind: 'admin' }
+  | { kind: 'device'; userId: string }
+  | { kind: 'session'; userId: string };
 
 async function resolveAuth(
   req: IncomingMessage,
@@ -136,7 +139,10 @@ async function resolveAuth(
   if (!tok) return null;
   if (tok === adminToken) return { kind: 'admin' };
   const device = await store.resolveDeviceToken(hashToken(tok));
-  return device ? { kind: 'device', userId: device.userId } : null;
+  if (device) return { kind: 'device', userId: device.userId };
+  const session = await store.resolveSession(hashToken(tok));
+  if (session) return { kind: 'session', userId: session.userId };
+  return null;
 }
 
 export function createSyncHttpServer(
@@ -180,10 +186,10 @@ export function createSyncHttpServer(
         return;
       }
 
-      // user the request is allowed to act as: a device is locked to its own user;
-      // the admin token may target any user via ?user=.
+      // user the request is allowed to act as: device + session tokens are locked
+      // to their own user; only the admin token may target any user via ?user=.
       const scopedUser =
-        auth.kind === 'device' ? auth.userId : (url.searchParams.get('user') ?? undefined);
+        auth.kind === 'admin' ? (url.searchParams.get('user') ?? undefined) : auth.userId;
 
       if (method === 'POST' && url.pathname === '/sync/push') {
         let body: unknown;
@@ -197,7 +203,7 @@ export function createSyncHttpServer(
           const result = await handlePush(
             store,
             body,
-            auth.kind === 'device' ? auth.userId : undefined,
+            auth.kind === 'admin' ? undefined : auth.userId,
           );
           send(res, result.status, result.body);
         } catch (err) {

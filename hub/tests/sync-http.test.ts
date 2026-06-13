@@ -4,8 +4,16 @@ import { createSyncHttpServer } from '../src/sync/http.js';
 import type { SyncStore } from '../src/sync/store.js';
 import { ScopeViolationError } from '../src/sync/store.js';
 import { hashToken } from '../src/sync/provision.js';
+import { hashPassword } from '../src/sync/auth.js';
+
+// Real scrypt hash of the login test password, computed once in beforeAll.
+let KNOWN_HASH: string;
 
 const DEVICE_USER = 'user-device';
+const SESSION_TOKEN = 'sesstoken';
+const DEVICE_TOKEN = 'devtoken';
+const OWNED_DEVICE = '00000000-0000-0000-0000-0000000000a1';
+const FOREIGN_DEVICE = '00000000-0000-0000-0000-0000000000b2';
 
 // Minimal in-memory stub of the parts of SyncStore the HTTP layer touches.
 function stubStore(): SyncStore {
@@ -15,8 +23,40 @@ function stubStore(): SyncStore {
       return 'user-default';
     },
     async resolveDeviceToken(hash: string) {
-      return hash === hashToken('devtoken') ? { deviceId: 'dev1', userId: DEVICE_USER } : null;
+      return hash === hashToken(DEVICE_TOKEN) ? { deviceId: 'dev1', userId: DEVICE_USER } : null;
     },
+    async resolveSession(hash: string) {
+      return hash === hashToken(SESSION_TOKEN) ? { userId: DEVICE_USER } : null;
+    },
+    // username/password + login
+    async isUsernameTaken(username: string) {
+      return username === 'dupe';
+    },
+    async createUserWithLogin() {
+      return { userId: 'new-user-id' };
+    },
+    async getUserByUsername(username: string) {
+      if (username === 'known')
+        return { userId: DEVICE_USER, passwordHash: KNOWN_HASH, profile: 'kid', litellmKey: 'sk-known' };
+      if (username === 'legacy')
+        return { userId: 'legacy-user', passwordHash: null, profile: 'kid', litellmKey: null };
+      return null;
+    },
+    async createSession() {
+      return { sessionId: 'sess-1' };
+    },
+    deleteSession: async () => {},
+    // device management
+    async listDevices(uid: string) {
+      return [{ id: OWNED_DEVICE, name: 'macbook', lastSync: null }].filter(() => uid === DEVICE_USER);
+    },
+    async getDevice(deviceId: string) {
+      if (deviceId === OWNED_DEVICE) return { deviceId: OWNED_DEVICE, userId: DEVICE_USER };
+      if (deviceId === FOREIGN_DEVICE) return { deviceId: FOREIGN_DEVICE, userId: 'user-other' };
+      return null;
+    },
+    rotateDeviceToken: async () => {},
+    deleteDevice: async () => {},
     async pull(_since: string, userId?: string) {
       return { conversations: [], messages: [], memories: [], cursor: `pulled:${userId}` };
     },
@@ -51,6 +91,7 @@ let baseUrl: string;
 let server: ReturnType<typeof createSyncHttpServer>;
 
 beforeAll(async () => {
+  KNOWN_HASH = await hashPassword('rightpass');
   server = createSyncHttpServer(stubStore(), 'admin-secret', {
     baseUrl: 'http://litellm.test',
     masterKey: 'sk-master',
@@ -192,5 +233,14 @@ describe('sync http auth + scoping', () => {
       body: JSON.stringify({ name: 'macbook', displayName: 'X', profile: 'wizard' }),
     });
     expect(res.status).toBe(400);
+  });
+
+  it('a session token cannot push another user\'s rows (scope enforced)', async () => {
+    const res = await fetch(`${baseUrl}/sync/push`, {
+      method: 'POST',
+      headers: { ...auth(SESSION_TOKEN), 'content-type': 'application/json' },
+      body: JSON.stringify({ conversations: [] }),
+    });
+    expect(res.status).toBe(403);
   });
 });
