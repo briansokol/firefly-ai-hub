@@ -63,4 +63,26 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_token_hash ON devices (token_hash)
 -- A delete is a normal LWW update that sets deleted_at and bumps updated_at, so it
 -- propagates through /sync/push + /sync/pull like any other conversation change.
 ALTER TABLE conversations ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+
+-- Account login (username + password). Nullable so existing CLI-provisioned
+-- users (username IS NULL) keep working; only login users have these set.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS username      TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT;
+
+-- Case-insensitive unique login id. Partial index so legacy NULL-username
+-- rows are exempt and never collide.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower
+  ON users (lower(username)) WHERE username IS NOT NULL;
+
+-- Short-lived session tokens minted by /auth/login + /auth/signup.
+-- Only the SHA-256 hash is stored (same discipline as devices.token_hash).
+CREATE TABLE IF NOT EXISTS sessions (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id    UUID NOT NULL REFERENCES users(id),
+  token_hash TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at TIMESTAMPTZ NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions (token_hash);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);
 `;
