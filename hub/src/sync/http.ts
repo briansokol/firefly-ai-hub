@@ -318,6 +318,69 @@ export function createSyncHttpServer(
       const scopedUser =
         auth.kind === 'admin' ? (url.searchParams.get('user') ?? undefined) : auth.userId;
 
+      if (method === 'GET' && url.pathname === '/devices') {
+        if (!scopedUser) {
+          send(res, 400, { error: 'missing user' });
+          return;
+        }
+        send(res, 200, { devices: await store.listDevices(scopedUser) });
+        return;
+      }
+
+      if (method === 'POST' && url.pathname === '/devices') {
+        if (!scopedUser) {
+          send(res, 400, { error: 'missing user' });
+          return;
+        }
+        let body: unknown;
+        try {
+          body = await readJson(req);
+        } catch {
+          send(res, 400, { error: 'invalid json' });
+          return;
+        }
+        const name = (body as Record<string, unknown>)?.name;
+        if (typeof name !== 'string' || !name.trim()) {
+          send(res, 400, { error: 'missing name' });
+          return;
+        }
+        const { deviceId, deviceToken } = await provisionDevice(store, {
+          userId: scopedUser,
+          name: name.trim(),
+        });
+        const litellmKey = await store.getUserLitellmKey(scopedUser);
+        send(res, 200, { deviceId, userId: scopedUser, deviceToken, litellmKey });
+        return;
+      }
+
+      const claimMatch = url.pathname.match(/^\/devices\/([0-9a-fA-F-]{36})\/claim$/);
+      if (method === 'POST' && claimMatch) {
+        const deviceId = claimMatch[1];
+        const device = await store.getDevice(deviceId);
+        if (!device || (auth.kind !== 'admin' && device.userId !== scopedUser)) {
+          send(res, 404, { error: 'unknown device' });
+          return;
+        }
+        const deviceToken = mintToken();
+        await store.rotateDeviceToken(deviceId, hashToken(deviceToken));
+        const litellmKey = await store.getUserLitellmKey(device.userId);
+        send(res, 200, { deviceId, userId: device.userId, deviceToken, litellmKey });
+        return;
+      }
+
+      const deviceMatch = url.pathname.match(/^\/devices\/([0-9a-fA-F-]{36})$/);
+      if (method === 'DELETE' && deviceMatch) {
+        const deviceId = deviceMatch[1];
+        const device = await store.getDevice(deviceId);
+        if (!device || (auth.kind !== 'admin' && device.userId !== scopedUser)) {
+          send(res, 404, { error: 'unknown device' });
+          return;
+        }
+        await store.deleteDevice(deviceId);
+        send(res, 200, { ok: true });
+        return;
+      }
+
       if (method === 'POST' && url.pathname === '/sync/push') {
         let body: unknown;
         try {
