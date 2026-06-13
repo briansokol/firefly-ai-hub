@@ -67,6 +67,29 @@ export interface SyncStore {
   setUserProfile(userId: string, profile: string): Promise<void>;
   createDevice(userId: string, name: string, tokenHash: string): Promise<{ deviceId: string }>;
   resolveDeviceToken(tokenHash: string): Promise<{ deviceId: string; userId: string } | null>;
+  // --- Account login (username/password) ---
+  createUserWithLogin(
+    displayName: string,
+    profile: string,
+    username: string,
+    passwordHash: string,
+  ): Promise<{ userId: string }>;
+  getUserByUsername(username: string): Promise<{
+    userId: string;
+    passwordHash: string | null;
+    profile: string;
+    litellmKey: string | null;
+  } | null>;
+  isUsernameTaken(username: string): Promise<boolean>;
+  // --- Sessions ---
+  createSession(userId: string, tokenHash: string, expiresAt: string): Promise<{ sessionId: string }>;
+  resolveSession(tokenHash: string): Promise<{ userId: string } | null>;
+  deleteSession(tokenHash: string): Promise<void>;
+  // --- Device management ---
+  listDevices(userId: string): Promise<{ id: string; name: string; lastSync: string | null }[]>;
+  getDevice(deviceId: string): Promise<{ deviceId: string; userId: string } | null>;
+  rotateDeviceToken(deviceId: string, newTokenHash: string): Promise<void>;
+  deleteDevice(deviceId: string): Promise<void>;
   push(payload: PushPayload, enforceUserId?: string): Promise<void>;
   pull(since: string, userId?: string): Promise<PullResult>;
   // --- Memory distillation (F2) ---
@@ -193,6 +216,89 @@ export async function createSyncStore(connectionString: string): Promise<SyncSto
       );
       if (rows.length === 0) return null;
       return { deviceId: rows[0].id, userId: rows[0].user_id };
+    },
+
+    async createUserWithLogin(displayName, profile, username, passwordHash) {
+      const { rows } = await pool.query<{ id: string }>(
+        'INSERT INTO users (display_name, profile, username, password_hash) VALUES ($1, $2, $3, $4) RETURNING id',
+        [displayName, profile, username, passwordHash],
+      );
+      return { userId: rows[0].id };
+    },
+
+    async getUserByUsername(username) {
+      const { rows } = await pool.query<{
+        id: string;
+        password_hash: string | null;
+        profile: string;
+        litellm_key: string | null;
+      }>(
+        'SELECT id, password_hash, profile, litellm_key FROM users WHERE lower(username) = lower($1)',
+        [username],
+      );
+      if (rows.length === 0) return null;
+      return {
+        userId: rows[0].id,
+        passwordHash: rows[0].password_hash,
+        profile: rows[0].profile,
+        litellmKey: rows[0].litellm_key,
+      };
+    },
+
+    async isUsernameTaken(username) {
+      const { rows } = await pool.query(
+        'SELECT 1 FROM users WHERE lower(username) = lower($1)',
+        [username],
+      );
+      return rows.length > 0;
+    },
+
+    async createSession(userId, tokenHash, expiresAt) {
+      const { rows } = await pool.query<{ id: string }>(
+        'INSERT INTO sessions (user_id, token_hash, expires_at) VALUES ($1, $2, $3) RETURNING id',
+        [userId, tokenHash, expiresAt],
+      );
+      return { sessionId: rows[0].id };
+    },
+
+    async resolveSession(tokenHash) {
+      const { rows } = await pool.query<{ user_id: string }>(
+        'SELECT user_id FROM sessions WHERE token_hash = $1 AND expires_at > now()',
+        [tokenHash],
+      );
+      return rows.length ? { userId: rows[0].user_id } : null;
+    },
+
+    async deleteSession(tokenHash) {
+      await pool.query('DELETE FROM sessions WHERE token_hash = $1', [tokenHash]);
+    },
+
+    async listDevices(userId) {
+      const { rows } = await pool.query<{ id: string; name: string; last_sync: Date | null }>(
+        'SELECT id, name, last_sync FROM devices WHERE user_id = $1 ORDER BY name ASC',
+        [userId],
+      );
+      return rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        lastSync: r.last_sync ? new Date(r.last_sync).toISOString() : null,
+      }));
+    },
+
+    async getDevice(deviceId) {
+      const { rows } = await pool.query<{ id: string; user_id: string }>(
+        'SELECT id, user_id FROM devices WHERE id = $1',
+        [deviceId],
+      );
+      return rows.length ? { deviceId: rows[0].id, userId: rows[0].user_id } : null;
+    },
+
+    async rotateDeviceToken(deviceId, newTokenHash) {
+      await pool.query('UPDATE devices SET token_hash = $2 WHERE id = $1', [deviceId, newTokenHash]);
+    },
+
+    async deleteDevice(deviceId) {
+      await pool.query('DELETE FROM devices WHERE id = $1', [deviceId]);
     },
 
     async push(payload, enforceUserId) {

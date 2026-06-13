@@ -14,7 +14,7 @@ describe.skipIf(!DB_URL)('sync store (Postgres)', () => {
   beforeAll(async () => {
     store = await createSyncStore(DB_URL as string);
     // Clean slate for repeatable runs.
-    await store.pool.query('TRUNCATE messages, conversations, memories, devices RESTART IDENTITY CASCADE');
+    await store.pool.query('TRUNCATE messages, conversations, memories, devices, sessions RESTART IDENTITY CASCADE');
     userId = await store.getDefaultUserId();
   });
 
@@ -186,5 +186,63 @@ describe.skipIf(!DB_URL)('sync store (Postgres)', () => {
         owner,
       ),
     ).resolves.toBeUndefined();
+  });
+
+  it('createUserWithLogin stores username/password_hash; getUserByUsername is case-insensitive', async () => {
+    const { userId: uid } = await store.createUserWithLogin('Kiddo', 'kid', 'Kiddo', 'scrypt$x');
+    const got = await store.getUserByUsername('kiddo'); // different case
+    expect(got?.userId).toBe(uid);
+    expect(got?.passwordHash).toBe('scrypt$x');
+    expect(got?.profile).toBe('kid');
+  });
+
+  it('isUsernameTaken is case-insensitive', async () => {
+    await store.createUserWithLogin('Taken', 'kid', 'TakenName', 'scrypt$x');
+    expect(await store.isUsernameTaken('takenname')).toBe(true);
+    expect(await store.isUsernameTaken('freename')).toBe(false);
+  });
+
+  it('duplicate username insert violates the unique index', async () => {
+    await store.createUserWithLogin('Dup', 'kid', 'dupuser', 'scrypt$x');
+    await expect(
+      store.createUserWithLogin('Dup2', 'kid', 'DupUser', 'scrypt$y'),
+    ).rejects.toMatchObject({ code: '23505' });
+  });
+
+  it('legacy users with NULL username do not collide', async () => {
+    await store.createUser('Legacy A', 'adult');
+    await store.createUser('Legacy B', 'adult'); // must not throw
+  });
+
+  it('createSession + resolveSession round-trip; expired sessions do not resolve', async () => {
+    const u = await store.createUser('Sess', 'adult');
+    const future = new Date(Date.now() + 60_000).toISOString();
+    await store.createSession(u.userId, 'hash-live', future);
+    expect((await store.resolveSession('hash-live'))?.userId).toBe(u.userId);
+
+    const past = new Date(Date.now() - 60_000).toISOString();
+    await store.createSession(u.userId, 'hash-dead', past);
+    expect(await store.resolveSession('hash-dead')).toBeNull();
+
+    await store.deleteSession('hash-live');
+    expect(await store.resolveSession('hash-live')).toBeNull();
+  });
+
+  it('listDevices / getDevice / rotateDeviceToken / deleteDevice', async () => {
+    const u = await store.createUser('Dev', 'adult');
+    const d1 = await store.createDevice(u.userId, 'macbook', 'tok-1');
+    await store.createDevice(u.userId, 'iphone', 'tok-2');
+
+    const list = await store.listDevices(u.userId);
+    expect(list.map((d) => d.name).sort()).toEqual(['iphone', 'macbook']);
+
+    expect((await store.getDevice(d1.deviceId))?.userId).toBe(u.userId);
+
+    await store.rotateDeviceToken(d1.deviceId, 'tok-1-new');
+    expect(await store.resolveDeviceToken('tok-1')).toBeNull();
+    expect((await store.resolveDeviceToken('tok-1-new'))?.deviceId).toBe(d1.deviceId);
+
+    await store.deleteDevice(d1.deviceId);
+    expect(await store.getDevice(d1.deviceId)).toBeNull();
   });
 });
