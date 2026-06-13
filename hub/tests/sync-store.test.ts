@@ -13,8 +13,11 @@ describe.skipIf(!DB_URL)('sync store (Postgres)', () => {
 
   beforeAll(async () => {
     store = await createSyncStore(DB_URL as string);
-    // Clean slate for repeatable runs.
-    await store.pool.query('TRUNCATE messages, conversations, memories, devices, sessions RESTART IDENTITY CASCADE');
+    // Clean slate for repeatable runs. Truncate users too (CASCADE clears the
+    // child tables) so username-uniqueness tests don't collide across runs, then
+    // re-seed a single default user for the tests that rely on getDefaultUserId.
+    await store.pool.query('TRUNCATE users RESTART IDENTITY CASCADE');
+    await store.pool.query("INSERT INTO users (display_name) VALUES ('default')");
     userId = await store.getDefaultUserId();
   });
 
