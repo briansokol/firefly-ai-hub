@@ -1,6 +1,7 @@
 // Delta-sync HTTP API for the multi-device app clients. Bearer-token auth.
-// Routes: POST /devices/register, POST /sync/push, GET /sync/pull,
-//         GET /memories/search (wired in F2).
+// Routes: POST /auth/signup, POST /auth/login (no token); GET/POST /devices,
+//         POST /devices/:id/claim, DELETE /devices/:id; POST /sync/push,
+//         GET /sync/pull, GET /memories/search (wired in F2).
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import { URL } from 'node:url';
 import type { SyncStore, PushPayload, MemoryRow } from './store.js';
@@ -54,71 +55,7 @@ function bearer(req: IncomingMessage): string | null {
   return m ? m[1] : null;
 }
 
-async function handleSelfRegister(
-  store: SyncStore,
-  litellm: LitellmConfig,
-  body: unknown,
-  isAdmin: boolean,
-): Promise<JsonResponse> {
-  if (!body || typeof body !== 'object') {
-    return { status: 400, body: { error: 'invalid body' } };
-  }
-  const { name, userId, displayName, profile } = body as Record<string, unknown>;
-  if (typeof name !== 'string' || !name.trim()) {
-    return { status: 400, body: { error: 'missing name' } };
-  }
 
-  // Existing-user path: attach a new device, return the user's existing key.
-  if (userId !== undefined) {
-    if (typeof userId !== 'string' || !userId) {
-      return { status: 400, body: { error: 'invalid userId' } };
-    }
-    const user = await store.getUser(userId);
-    if (!user) {
-      return { status: 404, body: { error: 'unknown user' } };
-    }
-    const { deviceId, deviceToken } = await provisionDevice(store, { userId, name: name.trim() });
-    return {
-      status: 200,
-      body: { deviceId, userId, deviceToken, litellmKey: user.litellmKey, profile: user.profile },
-    };
-  }
-
-  // New-user signup path: create user + mint LiteLLM key, then a device.
-  if (typeof displayName !== 'string' || !displayName.trim()) {
-    return { status: 400, body: { error: 'missing displayName' } };
-  }
-  // Profile is a user attribute. Open signups default to (and may only be) 'kid';
-  // creating a non-kid user requires the admin token.
-  let requestedProfile = 'kid';
-  if (profile !== undefined) {
-    if (typeof profile !== 'string' || !PROFILE_MODELS[profile]) {
-      return { status: 400, body: { error: 'invalid profile' } };
-    }
-    requestedProfile = profile;
-  }
-  if (requestedProfile !== 'kid' && !isAdmin) {
-    return { status: 403, body: { error: 'admin token required for non-kid profile' } };
-  }
-  const provisioned = await provisionUser(store, litellm, {
-    displayName: displayName.trim(),
-    profile: requestedProfile,
-  });
-  const { deviceId, deviceToken } = await provisionDevice(store, {
-    userId: provisioned.userId,
-    name: name.trim(),
-  });
-  return {
-    status: 200,
-    body: {
-      deviceId,
-      userId: provisioned.userId,
-      deviceToken,
-      litellmKey: provisioned.litellmKey,
-      profile: provisioned.profile,
-    },
-  };
-}
 
 async function handlePush(
   store: SyncStore,
@@ -259,26 +196,6 @@ export function createSyncHttpServer(
     try {
       const url = new URL(req.url ?? '/', 'http://localhost');
       const method = req.method ?? 'GET';
-
-      // Open self-registration: no auth on the tailnet. A device provisions its
-      // own token + LiteLLM key (new user) or attaches to an existing user.
-      if (method === 'POST' && url.pathname === '/devices/register') {
-        let body: unknown;
-        try {
-          body = await readJson(req);
-        } catch {
-          send(res, 400, { error: 'invalid json' });
-          return;
-        }
-        const result = await handleSelfRegister(
-          store,
-          litellm,
-          body,
-          bearer(req) === adminToken,
-        );
-        send(res, result.status, result.body);
-        return;
-      }
 
       // Account login: no token required (admin token only to create an adult user).
       if (method === 'POST' && url.pathname === '/auth/signup') {

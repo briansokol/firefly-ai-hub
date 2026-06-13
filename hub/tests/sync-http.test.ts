@@ -134,105 +134,13 @@ describe('sync http auth + scoping', () => {
     expect(res.status).toBe(403);
   });
 
-  it('self-registers a new user with no token (mints LiteLLM key)', async () => {
-    const realFetch = globalThis.fetch;
-    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) =>
-      typeof url === 'string' && url.startsWith('http://litellm.test')
-        ? new Response(JSON.stringify({ key: 'sk-user-key' }), { status: 200 })
-        : realFetch(url, init),
-    );
-
+  it('POST /devices/register is removed (authenticated -> 404 not found)', async () => {
     const res = await fetch(`${baseUrl}/devices/register`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'macbook', displayName: 'Kiddo', profile: 'kid' }),
-    });
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.userId).toBe('new-user-id');
-    expect(body.deviceId).toBe('new-device-id');
-    expect(body.litellmKey).toBe('sk-user-key');
-    expect(body.profile).toBe('kid');
-    expect(typeof body.deviceToken).toBe('string');
-    expect(body.deviceToken.length).toBeGreaterThan(0);
-  });
-
-  it('open signup with no profile defaults to kid', async () => {
-    const realFetch = globalThis.fetch;
-    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) =>
-      typeof url === 'string' && url.startsWith('http://litellm.test')
-        ? new Response(JSON.stringify({ key: 'sk-user-key' }), { status: 200 })
-        : realFetch(url, init),
-    );
-
-    const res = await fetch(`${baseUrl}/devices/register`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'macbook', displayName: 'Kiddo' }),
-    });
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.profile).toBe('kid');
-  });
-
-  it('open signup requesting an adult profile is rejected with 403', async () => {
-    const res = await fetch(`${baseUrl}/devices/register`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'macbook', displayName: 'Grown Up', profile: 'adult' }),
-    });
-    expect(res.status).toBe(403);
-  });
-
-  it('the admin token can create an adult user', async () => {
-    const realFetch = globalThis.fetch;
-    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) =>
-      typeof url === 'string' && url.startsWith('http://litellm.test')
-        ? new Response(JSON.stringify({ key: 'sk-adult-key' }), { status: 200 })
-        : realFetch(url, init),
-    );
-
-    const res = await fetch(`${baseUrl}/devices/register`, {
-      method: 'POST',
-      headers: { ...auth('admin-secret'), 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'macbook', displayName: 'Grown Up', profile: 'adult' }),
-    });
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.profile).toBe('adult');
-    expect(body.litellmKey).toBe('sk-adult-key');
-  });
-
-  it('self-registers a device under an existing user (returns existing key)', async () => {
-    const res = await fetch(`${baseUrl}/devices/register`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'iphone', userId: 'existing-user' }),
-    });
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.userId).toBe('existing-user');
-    expect(body.litellmKey).toBe('sk-existing');
-    expect(body.profile).toBe('adult');
-    expect(typeof body.deviceToken).toBe('string');
-  });
-
-  it('rejects an unknown existing userId with 404', async () => {
-    const res = await fetch(`${baseUrl}/devices/register`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'iphone', userId: 'nope' }),
+      headers: { ...auth(SESSION_TOKEN), 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'x', displayName: 'y' }),
     });
     expect(res.status).toBe(404);
-  });
-
-  it('rejects an unknown profile on signup with 400', async () => {
-    const res = await fetch(`${baseUrl}/devices/register`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'macbook', displayName: 'X', profile: 'wizard' }),
-    });
-    expect(res.status).toBe(400);
   });
 
   it('a session token cannot push another user\'s rows (scope enforced)', async () => {
