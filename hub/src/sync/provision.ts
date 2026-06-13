@@ -27,7 +27,7 @@ export interface ProvisionedUser {
 export async function provisionUser(
   store: SyncStore,
   litellm: LitellmConfig,
-  opts: { displayName: string; profile: string },
+  opts: { displayName: string; profile: string; username?: string; passwordHash?: string },
 ): Promise<ProvisionedUser> {
   const models = PROFILE_MODELS[opts.profile];
   if (!models) {
@@ -35,7 +35,10 @@ export async function provisionUser(
       `unknown profile '${opts.profile}' (expected: ${Object.keys(PROFILE_MODELS).join(', ')})`,
     );
   }
-  const { userId } = await store.createUser(opts.displayName, opts.profile);
+  const { userId } =
+    opts.username && opts.passwordHash
+      ? await store.createUserWithLogin(opts.displayName, opts.profile, opts.username, opts.passwordHash)
+      : await store.createUser(opts.displayName, opts.profile);
   const litellmKey = await generateVirtualKey(litellm, {
     models,
     keyAlias: `${opts.profile}-${opts.displayName}`.toLowerCase().replace(/\s+/g, '-'),
