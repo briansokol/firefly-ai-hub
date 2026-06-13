@@ -5,8 +5,16 @@ import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import { URL } from 'node:url';
 import type { SyncStore, PushPayload, MemoryRow } from './store.js';
 import { EPOCH, ScopeViolationError } from './store.js';
-import { hashToken, provisionUser, provisionDevice } from './provision.js';
+import { hashToken, mintToken, provisionUser, provisionDevice } from './provision.js';
 import { PROFILE_MODELS, type LitellmConfig } from './litellm.js';
+import {
+  hashPassword,
+  verifyPassword,
+  USERNAME_RE,
+  MIN_PASSWORD_LEN,
+  MAX_PASSWORD_LEN,
+  SESSION_TTL_MS,
+} from './auth.js';
 
 /** Semantic memory search: embed `q`, query Qdrant, hydrate rows. Wired in F2. */
 export type MemorySearchFn = (
@@ -125,6 +133,98 @@ async function handlePush(
   return { status: 200, body: { ok: true } };
 }
 
+
+async function handleAuthSignup(
+  store: SyncStore,
+  litellm: LitellmConfig,
+  body: unknown,
+  isAdmin: boolean,
+): Promise<JsonResponse> {
+  if (!body || typeof body !== 'object') return { status: 400, body: { error: 'invalid body' } };
+  const { username, password, displayName, profile } = body as Record<string, unknown>;
+
+  const uname = typeof username === 'string' ? username.trim().toLowerCase() : '';
+  if (!USERNAME_RE.test(uname)) return { status: 400, body: { error: 'invalid username' } };
+  if (typeof password !== 'string' || password.length < MIN_PASSWORD_LEN || password.length > MAX_PASSWORD_LEN)
+    return { status: 400, body: { error: 'invalid password' } };
+  if (typeof displayName !== 'string' || !displayName.trim())
+    return { status: 400, body: { error: 'missing displayName' } };
+
+  let requestedProfile = 'kid';
+  if (profile !== undefined) {
+    if (typeof profile !== 'string' || !PROFILE_MODELS[profile])
+      return { status: 400, body: { error: 'invalid profile' } };
+    requestedProfile = profile;
+  }
+  if (requestedProfile !== 'kid' && !isAdmin)
+    return { status: 403, body: { error: 'admin token required for non-kid profile' } };
+
+  if (await store.isUsernameTaken(uname)) return { status: 409, body: { error: 'username taken' } };
+
+  const passwordHash = await hashPassword(password);
+  let provisioned;
+  try {
+    provisioned = await provisionUser(store, litellm, {
+      displayName: displayName.trim(),
+      profile: requestedProfile,
+      username: uname,
+      passwordHash,
+    });
+  } catch (err) {
+    if (err && typeof err === 'object' && (err as { code?: string }).code === '23505')
+      return { status: 409, body: { error: 'username taken' } };
+    throw err;
+  }
+
+  const sessionToken = mintToken();
+  const sessionExpiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
+  await store.createSession(provisioned.userId, hashToken(sessionToken), sessionExpiresAt);
+
+  return {
+    status: 200,
+    body: {
+      userId: provisioned.userId,
+      username: uname,
+      displayName: displayName.trim(),
+      profile: provisioned.profile,
+      litellmKey: provisioned.litellmKey,
+      sessionToken,
+      sessionExpiresAt,
+    },
+  };
+}
+
+async function handleAuthLogin(store: SyncStore, body: unknown): Promise<JsonResponse> {
+  if (!body || typeof body !== 'object') return { status: 400, body: { error: 'invalid body' } };
+  const { username, password } = body as Record<string, unknown>;
+  if (typeof username !== 'string' || !username.trim())
+    return { status: 400, body: { error: 'missing username' } };
+  if (typeof password !== 'string' || !password)
+    return { status: 400, body: { error: 'missing password' } };
+
+  const user = await store.getUserByUsername(username.trim());
+  const ok = user?.passwordHash ? await verifyPassword(password, user.passwordHash) : false;
+  if (!user || !ok) return { status: 401, body: { error: 'invalid credentials' } };
+
+  const sessionToken = mintToken();
+  const sessionExpiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
+  await store.createSession(user.userId, hashToken(sessionToken), sessionExpiresAt);
+  const devices = await store.listDevices(user.userId);
+
+  return {
+    status: 200,
+    body: {
+      userId: user.userId,
+      username: username.trim().toLowerCase(),
+      profile: user.profile,
+      litellmKey: user.litellmKey,
+      sessionToken,
+      sessionExpiresAt,
+      devices,
+    },
+  };
+}
+
 type Auth =
   | { kind: 'admin' }
   | { kind: 'device'; userId: string }
@@ -176,6 +276,33 @@ export function createSyncHttpServer(
           body,
           bearer(req) === adminToken,
         );
+        send(res, result.status, result.body);
+        return;
+      }
+
+      // Account login: no token required (admin token only to create an adult user).
+      if (method === 'POST' && url.pathname === '/auth/signup') {
+        let body: unknown;
+        try {
+          body = await readJson(req);
+        } catch {
+          send(res, 400, { error: 'invalid json' });
+          return;
+        }
+        const result = await handleAuthSignup(store, litellm, body, bearer(req) === adminToken);
+        send(res, result.status, result.body);
+        return;
+      }
+
+      if (method === 'POST' && url.pathname === '/auth/login') {
+        let body: unknown;
+        try {
+          body = await readJson(req);
+        } catch {
+          send(res, 400, { error: 'invalid json' });
+          return;
+        }
+        const result = await handleAuthLogin(store, body);
         send(res, result.status, result.body);
         return;
       }

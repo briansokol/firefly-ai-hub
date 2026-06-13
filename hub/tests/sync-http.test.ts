@@ -244,3 +244,102 @@ describe('sync http auth + scoping', () => {
     expect(res.status).toBe(403);
   });
 });
+
+// Mock the LiteLLM /key/generate call (signup mints a virtual key).
+function stubLitellm() {
+  const realFetch = globalThis.fetch;
+  vi.stubGlobal('fetch', async (url: string, init?: RequestInit) =>
+    typeof url === 'string' && url.startsWith('http://litellm.test')
+      ? new Response(JSON.stringify({ key: 'sk-user-key' }), { status: 200 })
+      : realFetch(url, init),
+  );
+}
+
+describe('auth signup/login', () => {
+  it('signup creates a kid user and returns a session token + litellm key', async () => {
+    stubLitellm();
+    const res = await fetch(`${baseUrl}/auth/signup`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'Kiddo', password: 'longenough', displayName: 'Kiddo' }),
+    });
+    expect(res.status).toBe(200);
+    const j = await res.json();
+    expect(j.profile).toBe('kid');
+    expect(typeof j.sessionToken).toBe('string');
+    expect(typeof j.litellmKey).toBe('string');
+    expect(j.deviceToken).toBeUndefined();
+    expect(j.username).toBe('kiddo'); // lowercased
+  });
+
+  it('signup requesting adult without admin token -> 403', async () => {
+    const res = await fetch(`${baseUrl}/auth/signup`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'grown', password: 'longenough', displayName: 'G', profile: 'adult' }),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('signup adult with admin token -> 200 adult', async () => {
+    stubLitellm();
+    const res = await fetch(`${baseUrl}/auth/signup`, {
+      method: 'POST',
+      headers: { ...auth('admin-secret'), 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'grown2', password: 'longenough', displayName: 'G', profile: 'adult' }),
+    });
+    expect((await res.json()).profile).toBe('adult');
+  });
+
+  it('signup with a taken username -> 409', async () => {
+    const res = await fetch(`${baseUrl}/auth/signup`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'dupe', password: 'longenough', displayName: 'D' }),
+    });
+    expect(res.status).toBe(409);
+  });
+
+  it('signup rejects bad username / short password / missing displayName -> 400', async () => {
+    for (const body of [
+      { username: 'a', password: 'longenough', displayName: 'X' }, // too short
+      { username: 'okname', password: 'short', displayName: 'X' }, // password < 8
+      { username: 'okname', password: 'longenough' }, // no displayName
+    ]) {
+      const res = await fetch(`${baseUrl}/auth/signup`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      expect(res.status).toBe(400);
+    }
+  });
+
+  it('login with correct password -> 200 + sessionToken + devices', async () => {
+    const res = await fetch(`${baseUrl}/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'known', password: 'rightpass' }),
+    });
+    expect(res.status).toBe(200);
+    const j = await res.json();
+    expect(typeof j.sessionToken).toBe('string');
+    expect(Array.isArray(j.devices)).toBe(true);
+  });
+
+  it('login wrong password / unknown user / legacy null-hash all -> 401 invalid credentials', async () => {
+    for (const body of [
+      { username: 'known', password: 'wrong' },
+      { username: 'nobody', password: 'whatever' },
+      { username: 'legacy', password: 'whatever' },
+    ]) {
+      const res = await fetch(`${baseUrl}/auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      expect(res.status).toBe(401);
+      expect((await res.json()).error).toBe('invalid credentials');
+    }
+  });
+});
