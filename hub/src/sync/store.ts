@@ -81,6 +81,9 @@ export interface SyncStore {
     litellmKey: string | null;
   } | null>;
   isUsernameTaken(username: string): Promise<boolean>;
+
+  /** Remove a user row. Used to roll back a half-provisioned user. */
+  deleteUser(userId: string): Promise<void>;
   // --- Sessions ---
   createSession(userId: string, tokenHash: string, expiresAt: string): Promise<{ sessionId: string }>;
   resolveSession(tokenHash: string): Promise<{ userId: string } | null>;
@@ -299,6 +302,10 @@ export async function createSyncStore(connectionString: string): Promise<SyncSto
 
     async deleteDevice(deviceId) {
       await pool.query('DELETE FROM devices WHERE id = $1', [deviceId]);
+    },
+
+    async deleteUser(userId) {
+      await pool.query('DELETE FROM users WHERE id = $1', [userId]);
     },
 
     async push(payload, enforceUserId) {

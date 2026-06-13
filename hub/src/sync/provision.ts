@@ -39,12 +39,21 @@ export async function provisionUser(
     opts.username && opts.passwordHash
       ? await store.createUserWithLogin(opts.displayName, opts.profile, opts.username, opts.passwordHash)
       : await store.createUser(opts.displayName, opts.profile);
-  const litellmKey = await generateVirtualKey(litellm, {
-    models,
-    keyAlias: `${opts.profile}-${opts.displayName}`.toLowerCase().replace(/\s+/g, '-'),
-  });
-  await store.setUserLitellmKey(userId, litellmKey);
-  return { userId, profile: opts.profile, litellmKey };
+  // Key alias must be unique (LiteLLM enforces it). Derive it from the userId,
+  // not the display name — two users named "Brian" must not collide. If key
+  // minting fails, roll back the just-created user so we never leave a
+  // half-provisioned account (username taken, no usable key).
+  try {
+    const litellmKey = await generateVirtualKey(litellm, {
+      models,
+      keyAlias: `${opts.profile}-${userId}`.toLowerCase(),
+    });
+    await store.setUserLitellmKey(userId, litellmKey);
+    return { userId, profile: opts.profile, litellmKey };
+  } catch (err) {
+    await store.deleteUser(userId);
+    throw err;
+  }
 }
 
 export interface ProvisionedDevice {

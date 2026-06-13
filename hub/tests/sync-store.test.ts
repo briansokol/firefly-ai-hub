@@ -248,4 +248,11 @@ describe.skipIf(!DB_URL)('sync store (Postgres)', () => {
     await store.deleteDevice(d1.deviceId);
     expect(await store.getDevice(d1.deviceId)).toBeNull();
   });
+
+  it('deleteUser removes the user row', async () => {
+    const u = await store.createUser('Doomed', 'kid');
+    await store.deleteUser(u.userId);
+    const { rows } = await store.pool.query('SELECT 1 FROM users WHERE id = $1', [u.userId]);
+    expect(rows).toHaveLength(0);
+  });
 });
