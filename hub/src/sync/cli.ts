@@ -4,12 +4,14 @@
 // Or in dev:  npm run provision -- <cmd>
 //
 // Commands:
-//   user-add         --name "Brian" --profile adult|kid
+//   user-add         --name "Brian" --profile adult|kid [--username brian]
+//                    (--username also needs PROVISION_PASSWORD env var)
 //   user-list
 //   user-set-profile --user <uuid> --profile adult|kid
 //   device-add       --user <uuid> --name "macbook"
 import { createSyncStore } from './store.js';
 import { provisionUser, provisionDevice, setUserProfile } from './provision.js';
+import { hashPassword } from './auth.js';
 import type { LitellmConfig } from './litellm.js';
 
 function arg(flag: string): string | undefined {
@@ -38,7 +40,20 @@ async function main(): Promise<void> {
       const name = arg('--name');
       const profile = arg('--profile') ?? 'adult';
       if (!name) throw new Error('--name is required');
-      const u = await provisionUser(store, litellm, { displayName: name, profile });
+      // Optional login credentials. Password comes from PROVISION_PASSWORD (not a
+      // flag) so it does not land in shell history.
+      const username = arg('--username');
+      let passwordHash: string | undefined;
+      if (username) {
+        const pw = process.env.PROVISION_PASSWORD;
+        if (!pw) throw new Error('--username requires the PROVISION_PASSWORD env var');
+        passwordHash = await hashPassword(pw);
+      }
+      const u = await provisionUser(store, litellm, {
+        displayName: name,
+        profile,
+        ...(username ? { username, passwordHash } : {}),
+      });
       console.log(JSON.stringify(u, null, 2));
     } else if (cmd === 'user-list') {
       const { rows } = await store.pool.query(
