@@ -5,7 +5,9 @@
 > Where this doc and `PLAN-firefly-upgrade.md` disagree, this doc wins (it was written
 > from the running code). Phases F0–F3 are implemented: the system is **multi-user**,
 > with per-device sync tokens and per-user LiteLLM virtual keys (see section 0). A
-> post-F3 change made `POST /devices/register` open self-registration — see §0.1.
+> later change replaced device self-registration with **username/password account
+> login** (`POST /auth/signup` + `POST /auth/login`) and a device-management API;
+> `POST /devices/register` has been **removed** — see §0.3.
 
 ---
 
@@ -16,7 +18,7 @@ The system is now **multi-user**. Summary of endpoint/auth changes:
 | Endpoint | Status | Change |
 |---|---|---|
 | All sync routes | **CHANGED auth** | Was one shared `SYNC_API_TOKEN`. Now each device sends its **own device token** (issued at provisioning). The token determines the user. |
-| `POST /devices/register` | **CHANGED** | Became **admin-only** (`SYNC_API_TOKEN`, not a device token), with `userId` **required**; response gained `deviceToken`. _Superseded after F3 — registration is now open self-registration; see §0.1._ |
+| `POST /devices/register` | **REMOVED** | Was the device-registration endpoint (admin-only in F3, then open self-registration). _Removed entirely — accounts use `POST /auth/signup` + `POST /devices`; see §0.3._ |
 | `GET /sync/pull` | **CHANGED** | The `?user=` param is **ignored** for device tokens (a device always returns its own user's rows). Only the admin token may target another user via `?user=`. |
 | `GET /memories/search` | **CHANGED** | Same `?user=` change as pull — ignored for device tokens. |
 | `POST /sync/push` | **CHANGED** | Rows whose `user_id` is not the device's user are rejected with `403 {"error":"scope violation"}`. |
@@ -27,8 +29,13 @@ The system is now **multi-user**. Summary of endpoint/auth changes:
 
 ## 0.1 What changed after F3 (open self-registration)
 
-This is the **current** behavior and supersedes the F3 `POST /devices/register` row
-above. If you built against the admin-only F3 register endpoint, here is the delta:
+> **SUPERSEDED by §0.3.** Open self-registration via `POST /devices/register` has
+> been **removed**. Accounts are now created with `POST /auth/signup` and devices are
+> added with the authenticated device-management API. This section is kept only to
+> explain the migration path; do not build against `POST /devices/register`.
+
+This describes the (now-removed) open-registration behavior. If you built against the
+admin-only F3 register endpoint, here was the delta:
 
 | Area | Was (F3) | Now (current) |
 |---|---|---|
@@ -71,6 +78,37 @@ makes it explicit and adds conversation **deletion**. Both ride the existing
 
 ---
 
+## 0.3 What changed after F3 (account login + device management)
+
+This **removes** open device self-registration and replaces it with real accounts.
+A user now creates an account with a **username + password**, logs in to obtain a
+short-lived **session token**, and uses that token (or any of the user's device
+tokens) to list / register / claim / remove devices.
+
+| Area | Was (open self-registration) | Now (current) |
+|---|---|---|
+| Account creation | `POST /devices/register` with `{ name, displayName }`. | `POST /auth/signup` with `{ username, password, displayName, profile? }` (§3.2). |
+| Logging in on a device | n/a (paste a raw user UUID into `POST /devices/register`). | `POST /auth/login` with `{ username, password }` → session token + the user's device list (§3.2). |
+| Adding a device | `POST /devices/register` (open, no token). | `POST /devices` with a session **or** device token (§3.2). |
+| Reusing an existing device entry | n/a. | `POST /devices/:id/claim` rotates that device's token to the caller (§3.2). |
+| Listing / removing devices | n/a. | `GET /devices` / `DELETE /devices/:id` (§3.2). |
+| `POST /devices/register` | The onboarding endpoint. | **Removed.** Authenticated requests to it return `404`; unauthenticated ones `401`. |
+| Credential kinds | admin token + device token. | admin token + device token + **session token** (short-lived; see §3.0). |
+
+**Client impact:**
+- Onboarding is now two calls: `POST /auth/signup` (create the account, returns a
+  `sessionToken` + `litellmKey`) then `POST /devices` (register this device, returns
+  its durable `deviceToken`). A returning user calls `POST /auth/login` instead of
+  signup, then either `POST /devices` (new device) or `POST /devices/:id/claim`
+  (reuse an existing entry, e.g. after a reinstall).
+- The `sessionToken` is short-lived (~30 days); the `deviceToken` is the durable
+  credential for all `/sync/*` routes. Persist both; re-login when the session
+  expires (a `401` on a device-management call with a session token = expired).
+- Profile rules are unchanged: signups are `kid` by default; creating an `adult`
+  user requires the admin token (`SYNC_API_TOKEN`).
+
+---
+
 ## 1. Topology
 
 All services run on the host `firefly` and are reachable **only over the Tailscale
@@ -80,7 +118,7 @@ security boundary. Use the host's tailnet hostname/IP in place of `firefly` belo
 | Service | Port | Auth | Protocol |
 |---|---|---|---|
 | LiteLLM gateway | `4000` | `Authorization: Bearer <per-user virtual key>` | OpenAI-compatible REST |
-| Sync service | `8788` | `Authorization: Bearer <device token>`; `/devices/register` needs no token (admin token only to create an `adult` user or to target another user via `?user=`) | JSON REST |
+| Sync service | `8788` | `Authorization: Bearer <device or session token>`; `/auth/signup` + `/auth/login` need no token (admin token only to create an `adult` user or to target another user via `?user=`) | JSON REST |
 
 There are two other ports on the box (`11434` Ollama, `6333` Qdrant, `8787` web
 tools). **The client must not talk to those directly.** Inference goes through
@@ -144,22 +182,29 @@ Delta-sync API backed by Postgres. Every request requires the bearer token.
 
 ### 3.0 Auth and conventions
 
-- **Auth:** `Authorization: Bearer <device token>` on every route. Each device has
-  its own token, issued at provisioning; the token alone determines the user. A
-  missing or unknown token returns `401 {"error":"unauthorized"}`. `/devices/register`
-  is the one exception — it needs **no** token (see §3.2). The admin token
-  (`SYNC_API_TOKEN`) is operator/provisioning-only: it may target any user via
-  `?user=` and is required to create an `adult` user via register. App clients never
-  use the admin token.
+- **Auth:** `Authorization: Bearer <token>` on every route except `/auth/signup`
+  and `/auth/login` (which need **no** token). There are three credential kinds, all
+  resolved from the same bearer header:
+  - **device token** — issued when a device is registered; durable; the credential
+    for all `/sync/*` routes. The token alone determines the user.
+  - **session token** — minted by `/auth/signup` + `/auth/login`; short-lived
+    (~30 days); used to authorize the device-management routes (`GET/POST /devices`,
+    `POST /devices/:id/claim`, `DELETE /devices/:id`). Device tokens also work on
+    those routes. A missing or unknown/expired token returns
+    `401 {"error":"unauthorized"}`.
+  - **admin token** (`SYNC_API_TOKEN`) — operator/provisioning-only: it may target
+    any user via `?user=` and is required to create an `adult` user via signup. App
+    clients never use the admin token.
 - **Content type:** request and response bodies are `application/json`.
 - **IDs are client-generated** UUIDs (UUIDv7 recommended so they sort by time).
   The server upserts by these IDs; it does not mint conversation/message IDs.
 - **Timestamps** are ISO-8601 UTC strings with millisecond precision and a `Z`
   suffix, e.g. `2026-06-06T14:03:21.118Z`. The client supplies them on every row.
-- **User scope:** the system is multi-user. Your device token is bound to exactly
-  one user; stamp that `user_id` (provided at provisioning) on every row you create.
-  `pull` and `memories/search` always return your own user's data — the `?user=`
-  param is ignored for device tokens. Pushing rows for another user returns `403`.
+- **User scope:** the system is multi-user. Your device/session token is bound to
+  exactly one user; stamp that `user_id` (returned by signup/login) on every row you
+  create. `pull` and `memories/search` always return your own user's data — the
+  `?user=` param is ignored for device and session tokens (admin only). Pushing rows
+  for another user returns `403`.
 
 ### 3.1 Data shapes
 
@@ -169,7 +214,7 @@ These are the exact field names and nullability the API uses on the wire.
 // conversation — last-write-wins by updated_at
 {
   id: string,            // client-generated UUID
-  user_id: string,       // UUID from /devices/register
+  user_id: string,       // UUID from /auth/signup or /auth/login
   title: string | null,
   created_at: string,    // ISO-8601 UTC
   updated_at: string,    // ISO-8601 UTC; drives LWW + the sync cursor
@@ -196,45 +241,92 @@ These are the exact field names and nullability the API uses on the wire.
 }
 ```
 
-### 3.2 `POST /devices/register` (open self-registration)
+### 3.2 Account login + device management
 
-A device provisions itself with **no token** — the tailnet is the trust boundary.
-There are two modes, selected by the body:
+`POST /devices/register` has been **removed**. Accounts are created and devices
+managed through the endpoints below. Onboarding is: `POST /auth/signup` (or
+`/auth/login` for a returning user) to get a `sessionToken`, then `POST /devices` to
+register this device and obtain its durable `deviceToken`.
 
-**New user (self-signup)** — creates a user, mints its per-user LiteLLM key, and
-registers this device:
+#### `POST /auth/signup` (no token; admin token only for an `adult` user)
+
+Creates a user, mints its per-user LiteLLM key, and returns a session token.
 ```json
-{ "name": "macbook", "displayName": "Kiddo" }
+{ "username": "kiddo", "password": "at-least-8-chars", "displayName": "Kiddo" }
 ```
-- `name` (required): device label.
-- `displayName` (required): the new user's display name.
-- `profile` (optional): the **user's** profile, which sets the LiteLLM model
-  allow-list (`adult` = `fast/code/chat-heavy/frontier`; `kid` = `fast/chat-heavy`)
-  for that user and all of its devices. **Open signups are always `kid`** — the field
-  defaults to `kid` and any other value requires the admin token. Creating an `adult`
-  user therefore needs `Authorization: Bearer <SYNC_API_TOKEN>`; without it, a non-kid
-  profile returns `403 {"error":"admin token required for non-kid profile"}`. An
-  unknown profile returns `400 {"error":"invalid profile"}`.
+- `username` (required): login id. Trimmed + lowercased; must match
+  `^[a-z0-9_.-]{3,32}$`. Invalid form → `400 {"error":"invalid username"}`. Already
+  taken → `409 {"error":"username taken"}`.
+- `password` (required): 8–256 chars. Out of range → `400 {"error":"invalid password"}`.
+- `displayName` (required): the user's display name. Missing → `400 {"error":"missing displayName"}`.
+- `profile` (optional): the user's profile (model allow-list: `adult` =
+  `fast/code/chat-heavy/frontier`; `kid` = `fast/chat-heavy`). **Defaults to `kid`**;
+  any other value requires `Authorization: Bearer <SYNC_API_TOKEN>`, else
+  `403 {"error":"admin token required for non-kid profile"}`. Unknown value →
+  `400 {"error":"invalid profile"}`.
 
-**Existing user** — adds a device to a known user and returns that user's existing key:
+Response `200`:
 ```json
-{ "name": "iphone", "userId": "existing-user-uuid" }
+{ "userId": "uuid", "username": "kiddo", "displayName": "Kiddo", "profile": "kid",
+  "litellmKey": "<per-user LiteLLM key>", "sessionToken": "<bearer, shown once>",
+  "sessionExpiresAt": "2026-07-12T14:03:21.118Z" }
 ```
-- `name` (required): device label.
-- `userId` (required): the user to attach to. Unknown id returns
-  `404 {"error":"unknown user"}`.
+Signup returns **no** device token — call `POST /devices` next. Persist `litellmKey`
+(the API key for `:4000`) and stamp `userId` on every row you create.
 
-Response `200` (both modes):
+#### `POST /auth/login` (no token)
+
+Verifies credentials and returns a fresh session token plus the user's devices.
 ```json
-{ "deviceId": "uuid", "userId": "uuid", "deviceToken": "<bearer, shown once>", "litellmKey": "<per-user LiteLLM key>", "profile": "kid" }
+{ "username": "kiddo", "password": "at-least-8-chars" }
 ```
-Persist `deviceToken` (the device's bearer token for all sync routes) and `litellmKey`
-(the API key for `:4000`), and stamp `userId` onto every conversation/memory you create.
-Errors: `400 {"error":"missing name"}` / `{"error":"missing displayName"}` /
-`{"error":"invalid profile"}` / `{"error":"invalid userId"}`; `404 {"error":"unknown user"}`.
+Response `200`:
+```json
+{ "userId": "uuid", "username": "kiddo", "profile": "kid",
+  "litellmKey": "<per-user LiteLLM key>", "sessionToken": "<bearer, shown once>",
+  "sessionExpiresAt": "2026-07-12T14:03:21.118Z",
+  "devices": [ { "id": "uuid", "name": "macbook", "lastSync": "...Z|null" } ] }
+```
+Bad credentials, unknown username, or a user without a password all return the same
+`401 {"error":"invalid credentials"}` (no account enumeration). Missing fields →
+`400 {"error":"missing username"}` / `{"error":"missing password"}`.
+
+#### `GET /devices` (session **or** device token)
+
+Lists the authenticated user's devices.
+```json
+{ "devices": [ { "id": "uuid", "name": "macbook", "lastSync": "...Z|null" } ] }
+```
+
+#### `POST /devices` (session **or** device token)
+
+Registers a new device for the authenticated user.
+```json
+{ "name": "macbook" }
+```
+- `name` (required): device label. Missing → `400 {"error":"missing name"}`.
+
+Response `200`:
+```json
+{ "deviceId": "uuid", "userId": "uuid", "deviceToken": "<bearer, shown once>", "litellmKey": "<per-user LiteLLM key>" }
+```
+Persist `deviceToken` — it is the durable credential for all `/sync/*` routes.
+
+#### `POST /devices/:id/claim` (session **or** device token)
+
+Rotates an existing device entry's token to the caller (e.g. after a reinstall, to
+reuse a slot rather than create a duplicate). The old token stops working.
+Response `200` is the same shape as `POST /devices`. A device id that does not exist
+or belongs to another user → `404 {"error":"unknown device"}`.
+
+#### `DELETE /devices/:id` (session **or** device token)
+
+Removes a device from the account (revokes its token). Response `200 {"ok": true}`.
+Not owned / unknown → `404 {"error":"unknown device"}`.
 
 The operator CLI (`user-add` / `device-add`) remains available for server-side
-provisioning; the admin token (`SYNC_API_TOKEN`) is no longer required to register.
+provisioning; `user-add --username` (with a `PROVISION_PASSWORD` env var) creates a
+login-capable user.
 
 ### 3.3 `POST /sync/push`
 
@@ -300,7 +392,10 @@ opaque to you otherwise — store and echo it, don't compute on it.
 
 ### 3.5 Suggested sync loop
 
-1. On launch, `POST /devices/register` if you have no stored `deviceId`.
+1. On first launch, onboard: `POST /auth/signup` (or `/auth/login` for a returning
+   user) to get a `sessionToken`, then `POST /devices` to obtain this device's
+   `deviceToken`. Persist the `deviceToken` and `litellmKey`; subsequent launches
+   reuse the stored `deviceToken`.
 2. Push the local outbound queue with `POST /sync/push` (idempotent; retry freely).
 3. `GET /sync/pull?since=<saved cursor>`; merge results locally:
    - upsert conversations/memories by `id`, keeping the row with the newer
@@ -358,15 +453,18 @@ All errors are JSON `{"error": "<message>"}` with these statuses:
 
 | Status | When |
 |---|---|
-| `400` | malformed JSON, missing/invalid required field (`name`, `displayName`, `q`, `userId`), or unknown `profile` on register |
-| `401` | missing/invalid bearer token |
-| `403` | scope violation (pushing another user's rows), or creating a non-`kid` user via register without the admin token |
-| `404` | unknown route/method, or `/devices/register` with a `userId` that does not exist (`{"error":"unknown user"}`) |
+| `400` | malformed JSON, missing/invalid required field (`username`, `password`, `displayName`, `name`, `q`), or unknown `profile` on signup |
+| `401` | missing/invalid/expired bearer token; `{"error":"invalid credentials"}` on `/auth/login` |
+| `403` | scope violation (pushing another user's rows), or creating a non-`kid` user via signup without the admin token |
+| `404` | unknown route/method, or an unknown/foreign device on `/devices/:id/claim` and `DELETE /devices/:id` (`{"error":"unknown device"}`) |
+| `409` | `{"error":"username taken"}` on `/auth/signup` |
 | `501` | `/memories/search` called but memory search not wired on server |
 | `500` | server-side failure |
 
 Treat `5xx` and network errors as retryable (the sync writes are idempotent).
-Treat `400`/`401`/`403` as client bugs to surface, not retry.
+Treat `400`/`403`/`404`/`409` as client bugs to surface, not retry. A `401` on a
+device-management call made with a session token means the session expired — prompt
+the user to log in again.
 
 ---
 
@@ -386,10 +484,18 @@ Treat `400`/`401`/`403` as client bugs to surface, not retry.
 POST   http://firefly:4000/v1/chat/completions     Bearer <per-user virtual key>
 GET    http://firefly:4000/v1/models               Bearer <per-user virtual key>
 
-# Sync (Bearer = the device token; /devices/register needs no token)
-POST   http://firefly:8788/devices/register        { name, displayName }  -> { deviceId, userId, deviceToken, litellmKey, profile }   # new kid user
-POST   http://firefly:8788/devices/register        { name, userId }       -> { deviceId, userId, deviceToken, litellmKey, profile }   # device for existing user
+# Account (no token; admin token only to create an adult user)
+POST   http://firefly:8788/auth/signup             { username, password, displayName, profile? } -> { userId, username, displayName, profile, litellmKey, sessionToken, sessionExpiresAt }
+POST   http://firefly:8788/auth/login              { username, password }                        -> { userId, username, profile, litellmKey, sessionToken, sessionExpiresAt, devices }
 #      (adult user: add  Authorization: Bearer <SYNC_API_TOKEN>  and  "profile":"adult")
+
+# Devices (Bearer = session token from login/signup, or a device token)
+GET    http://firefly:8788/devices                 -> { devices: [ { id, name, lastSync } ] }
+POST   http://firefly:8788/devices                 { name } -> { deviceId, userId, deviceToken, litellmKey }
+POST   http://firefly:8788/devices/<id>/claim      -> { deviceId, userId, deviceToken, litellmKey }   # rotate token to this device
+DELETE http://firefly:8788/devices/<id>            -> { ok: true }
+
+# Sync (Bearer = the device token)
 POST   http://firefly:8788/sync/push               { conversations?, messages?, memories? } -> { ok: true }
 GET    http://firefly:8788/sync/pull?since=         -> { conversations, messages, memories, cursor }
 GET    http://firefly:8788/memories/search?q=&k=8   -> { memories }
