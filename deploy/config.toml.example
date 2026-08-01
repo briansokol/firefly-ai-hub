@@ -4,9 +4,9 @@ allowed_user_ids = ["YOUR_DISCORD_USER_ID"]
 guild_id         = "YOUR_GUILD_ID"
 
 [models]
-default         = "gemma4:26b"
-coding          = "qwen2.5-coder:32b"
-complex         = "gemma4:26b"
+default         = "qwen3.6:27b-q4_k_m"
+coding          = "qwen3-coder:30b"
+complex         = "qwen3.6:27b-q4_k_m"
 ollama_base_url = "http://host.docker.internal:11434/v1"
 
 [schedule]

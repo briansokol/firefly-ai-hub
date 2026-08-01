@@ -21,7 +21,7 @@ model_list:
 
   - model_name: fast                  # quick replies, routing, triage
     litellm_params:
-      model: ollama_chat/qwen3:4b
+      model: ollama_chat/qwen3.5:4b
       api_base: http://host.docker.internal:11434
 
   # --- Cloud fallback: frontier quality when local can't cut it ---
