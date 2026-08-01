@@ -295,6 +295,7 @@ export function createActivities(deps: ActivityDeps) {
 
     async generateDailySummary(): Promise<string> {
       const today = new Date().toLocaleDateString('en-US', {
+        timeZone: config.schedule.timezone,
         weekday: 'long',
         month: 'long',
         day: 'numeric',
@@ -329,7 +330,9 @@ export function createActivities(deps: ActivityDeps) {
 
       if (typeof (message as { startThread?: unknown }).startThread !== 'function') return;
 
-      const todayISO = new Date().toISOString().slice(0, 10);
+      const todayISO = new Date().toLocaleDateString('en-CA', {
+        timeZone: config.schedule.timezone,
+      });
       const thread = await message.startThread({
         name: `Email Digest — ${todayISO}`,
         autoArchiveDuration: 1440,
